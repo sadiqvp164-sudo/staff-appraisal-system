@@ -1,26 +1,52 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, createContext, useContext } from 'react';
 import {
-  Award, CalendarDays, CalendarCheck, FileCheck2, GraduationCap, LayoutDashboard, LogOut, Menu, Plus,
+  Award, ClipboardList, GraduationCap, LayoutDashboard, LogOut, Menu, Plus,
   ShieldCheck, Users, X, Download, Settings, Edit, Trash2, Camera, Megaphone, Gift, BarChart3,
-  History, Clock, Search, Printer, Pin, Eye, EyeOff
+  Search, Printer, Pin, Eye, EyeOff
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 // ==========================================
-// CONSTANTS & HELPERS
+// CONSTANTS: DOMAINS & SUB-DOMAINS (from the policy PDF)
 // ==========================================
 const CYCLE = '2026-2027';
-const LATE_AFTER = '09:15'; // check-in after this time is marked "Late"
+const WORK_SHARE = 0.5; // when a sub-domain has BOTH a rating and work records: 50% work + 50% rating
+const MAX_SUBJECTS = 8;
 
-const domains = [
-  { code: 'D1', name: 'Teaching, Learning & Learner Achievement', weight: 25, color: '#2563eb' },
-  { code: 'D2', name: 'Student Mentoring & Wellbeing', weight: 15, color: '#7c3aed' },
-  { code: 'D3', name: 'Campus Engagement & Responsibilities', weight: 15, color: '#d97706' },
-  { code: 'D4', name: 'Collaboration & Communication', weight: 10, color: '#0d9488' },
-  { code: 'D5', name: 'Professional Development & TPD', weight: 10, color: '#db2777' },
-  { code: 'D6', name: 'Professionalism & Reliability', weight: 15, color: '#16a34a' },
-  { code: 'D7', name: 'Academic Leadership & Governance', weight: 10, color: '#4f46e5' }
+const RAW_DOMAINS = [
+  { code: 'D1', name: 'Teaching, Learning & Learner Achievement', weight: 25, color: '#2563eb', subs: [
+    ['T1', 'Curriculum & Lesson Planning', 4], ['T2', 'Subject Knowledge & Academic Preparation', 4], ['T3', 'Pedagogical Practice & Classroom Teaching', 5],
+    ['T4', 'Learner Engagement & Classroom Environment', 4], ['T5', 'Assessment, Feedback & Remediation (CCE)', 4], ['T6', 'Learner Progress & Achievement', 4]] },
+  { code: 'D2', name: 'Student Mentoring, Wellbeing & Holistic Development', weight: 15, color: '#7c3aed', subs: [
+    ['M1', 'Knowing & Understanding Students', 3], ['M2', 'Mentor–Student Relationship & Engagement', 3], ['M3', 'Holistic Student Development', 3],
+    ['M4', 'Wellbeing, Care & Early Identification', 2], ['M5', 'Guidance, Intervention & Follow-up', 2], ['M6', 'Documentation, Reflection & Impact', 2]] },
+  { code: 'D3', name: 'Campus Engagement & Institutional Responsibilities', weight: 15, color: '#d97706', subs: [
+    ['C1', 'Weekly Duties', 3], ['C2', 'Preparation / Dars Monitoring', 3], ['C3', 'Special Task / In-Charge Responsibility', 3],
+    ['C4', 'Programmes & Institutional Activities', 2], ['C5', 'Coordination & Collective Responsibility', 2], ['C6', 'Initiative & Improvement', 2]] },
+  { code: 'D4', name: 'Collaboration, Communication & Campus Community', weight: 10, color: '#0d9488', subs: [
+    ['CO1', 'Collegial Collaboration & Teamwork', 2], ['CO2', 'Communication & Information Sharing', 2], ['CO3', 'Professional Relationships & Campus Conduct', 2],
+    ['CO4', 'Conflict Management & Constructive Interaction', 2], ['CO5', 'Institutional Community & Collective Culture', 2]] },
+  { code: 'D5', name: 'Personal & Professional Development, TPD & Research', weight: 10, color: '#db2777', subs: [
+    ['PD1', 'Participation & Engagement in DH TPD', 2], ['PD2', 'Response to TPD & Application of Learning', 2], ['PD3', 'Continuous Personal & Professional Learning', 2],
+    ['PD4', 'Research, Writing & Knowledge Contribution', 2], ['PD5', 'Reflection, Innovation & Professional Growth', 2]] },
+  { code: 'D6', name: 'Professionalism, Reliability & Institutional Responsibility', weight: 15, color: '#16a34a', subs: [
+    ['PR1', 'Attendance, Presence & Time Management', 3], ['PR2', 'Punctuality & Timeliness of Duties', 3], ['PR3', 'Dress Code & Institutional Standards', 2],
+    ['PR4', 'Code of Conduct & Professional Ethics', 3], ['PR5', 'HR & Institutional Procedure Compliance', 2], ['PR6', 'Reliability, Accountability & Responsibility', 2]] },
+  { code: 'D7', name: 'Academic Leadership, Governance & Institutional Contribution', weight: 10, color: '#4f46e5', subs: [
+    ['AL1', 'Academic Committee & Governance Participation', 2], ['AL2', 'Curriculum Development & Academic Planning', 2], ['AL3', 'Academic Decision-Making & Policy Contribution', 2],
+    ['AL4', 'Academic Leadership & Institutional Initiatives', 2], ['AL5', 'Special Academic Contribution', 2]] }
 ];
+const domains = RAW_DOMAINS.map(d => ({ ...d, subs: d.subs.map(([code, name, weight]) => ({ code, name, weight, domain: d.code, color: d.color })) }));
+const SUBS = domains.flatMap(d => d.subs);
+const SUB = Object.fromEntries(SUBS.map(s => [s.code, s]));
+const RATING_LABEL = { 5: 'Exceptional', 4: 'Strong', 3: 'Expected', 2: 'Developing', 1: 'Unsatisfactory', 0: 'Not applicable' };
+
+// the three kinds of work stored in `work_items`
+const KINDS = {
+  cce: { label: 'CCE Works', one: 'CCE', def: 'T5' },
+  duty: { label: 'Weekly Duties', one: 'Duty', def: 'C1' },
+  task: { label: 'Special Tasks', one: 'Task', def: 'AL4' }
+};
 
 const ALL = ['admin', 'coordinator', 'teacher', 'appraisal_authority'];
 const nav = [
@@ -28,26 +54,22 @@ const nav = [
   { id: 'announcements', label: 'Announcements', icon: Megaphone, roles: ALL },
   { id: 'scores', label: 'Staff Leaderboard', icon: Award, roles: ALL },
   { id: 'staff', label: 'Staff Directory', icon: Users, roles: ['admin', 'coordinator', 'appraisal_authority'] },
-  { id: 'attendance', label: 'Attendance', icon: CalendarCheck, roles: ALL },
-  { id: 'leave', label: 'Leave Requests', icon: Clock, roles: ALL },
-  { id: 'duties', label: 'Duty & Tasks', icon: CalendarDays, roles: ['admin', 'coordinator', 'teacher'] },
-  { id: 'evidence', label: 'Evidence Portfolio', icon: FileCheck2, roles: ALL },
+  { id: 'work', label: 'Work & CCE', icon: ClipboardList, roles: ALL },
   { id: 'bonus', label: 'Bonus Points', icon: Gift, roles: ALL },
   { id: 'appraisal', label: 'Appraisal Workflow', icon: GraduationCap, roles: ALL },
   { id: 'reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'coordinator', 'appraisal_authority'] },
-  { id: 'activity', label: 'Activity Log', icon: History, roles: ['admin'] },
   { id: 'settings', label: 'My Account', icon: Settings, roles: ALL }
 ];
 
+// ==========================================
+// HELPERS
+// ==========================================
 const ymd = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const todayStr = () => ymd();
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
-const lastDayOf = (month) => { const [y, m] = month.split('-').map(Number); return String(new Date(y, m, 0).getDate()).padStart(2, '0'); };
-const dateRange = (from, to) => {
-  const out = []; const d = new Date(from + 'T00:00:00'); const end = new Date(to + 'T00:00:00');
-  while (d <= end && out.length < 62) { if (d.getDay() !== 0) out.push(ymd(d)); d.setDate(d.getDate() + 1); }
-  return out;
-};
+const lastDayOf = (month) => { const [y, m] = month.split('-').map(Number); return `${month}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
+const addDays = (s, n) => { const d = new Date(s + 'T00:00:00'); d.setDate(d.getDate() + n); return ymd(d); };
+const monthLabel = (m) => new Date(m + '-01T00:00:00').toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
 
 function downloadCSV(filename, headers, rows) {
   const esc = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
@@ -59,24 +81,53 @@ function downloadCSV(filename, headers, rows) {
   URL.revokeObjectURL(url);
 }
 
-async function logActivity(profile, action, details = '') {
-  try { await supabase.from('activity_log').insert({ actor_id: profile?.id, actor_name: profile?.full_name, action, details }); } catch (e) { /* ignore */ }
+// ------------------------------------------------------------------
+// WORK -> per sub-domain {assigned, earned}
+// A work item counts only when it is Completed OR its due date has passed.
+// (Work that is not yet due and not done is NOT counted against the staff member.)
+// ------------------------------------------------------------------
+function workMap(items, today = todayStr()) {
+  const m = {};
+  items.forEach(i => {
+    if (!i.sub_code) return;
+    const done = i.status === 'Completed';
+    const pastDue = i.due_date && i.due_date < today;
+    if (!done && !pastDue) return;
+    const e = (m[i.sub_code] = m[i.sub_code] || { assigned: 0, earned: 0, n: 0, done: 0 });
+    const max = Number(i.marks) || 0;
+    e.assigned += max; e.n++;
+    if (done) { e.earned += Math.min(max, Number(i.awarded ?? i.marks) || 0); e.done++; }
+  });
+  return m;
 }
 
-// Same formula everywhere: manual (rating/5 x weight) + auto marks, capped at weight.
-// N/A domains (rating === null) are excluded and the total is scaled to 100.
-function computeScores(ratings, auto) {
-  const per = {}; let sum = 0, w = 0;
+// ------------------------------------------------------------------
+// SCORING (same function everywhere)
+// ratings[sub] : 1..5 rating, 0 = N/A, undefined = not rated
+// work[sub]    : {assigned, earned}
+// Per sub-domain:  rating% = rating/5 ; work% = earned/assigned
+//   both present -> WORK_SHARE*work% + (1-WORK_SHARE)*rating% ; one present -> that one ; none -> N/A (excluded)
+// Per domain: sum of applicable sub-domain marks, re-scaled to the domain weight (N/A sub-domains do not reduce marks)
+// Total: applicable domains re-scaled to 100 (a domain that does not apply to the staff member does not reduce marks)
+// ------------------------------------------------------------------
+function computeScores(ratings, work) {
+  const subs = {}; const per = {}; let sum = 0, w = 0;
   domains.forEach(d => {
-    const r = ratings[d.code] === undefined ? 3 : ratings[d.code];
-    if (r === null) { per[d.code] = { na: true, manual: 0, auto: 0, total: 0 }; return; }
-    const manual = (r / 5) * d.weight;
-    const a = auto[d.code] || 0;
-    const total = Math.min(d.weight, manual + a);
-    per[d.code] = { na: false, manual, auto: a, total };
-    sum += total; w += d.weight;
+    let dEarn = 0, dW = 0;
+    d.subs.forEach(s => {
+      const r = ratings[s.code]; const wk = work[s.code];
+      const rp = r >= 1 ? r / 5 : null;
+      const wp = wk && wk.assigned > 0 ? wk.earned / wk.assigned : null;
+      let pct = null;
+      if (rp !== null && wp !== null) pct = WORK_SHARE * wp + (1 - WORK_SHARE) * rp;
+      else if (wp !== null) pct = wp; else if (rp !== null) pct = rp;
+      if (pct === null) subs[s.code] = { na: true, score: 0, rp, wp };
+      else { subs[s.code] = { na: false, score: pct * s.weight, pct, rp, wp }; dEarn += pct * s.weight; dW += s.weight; }
+    });
+    if (!dW) per[d.code] = { na: true, score: 0 };
+    else { const sc = (dEarn / dW) * d.weight; per[d.code] = { na: false, score: sc }; sum += sc; w += d.weight; }
   });
-  return { per, total: w ? Math.min(100, (sum / w) * 100) : 0 };
+  return { subs, per, total: w ? Math.min(100, (sum / w) * 100) : 0 };
 }
 
 const S = {
@@ -92,13 +143,12 @@ const S = {
 
 const TONES = { green: ['#dcfce7', '#166534'], amber: ['#fef3c7', '#92400e'], red: ['#fee2e2', '#991b1b'], blue: ['#e0e7ff', '#3730a3'], purple: ['#fae8ff', '#86198f'], gray: ['#f1f5f9', '#475569'] };
 const STATUS_TONE = {
-  Pending: 'amber', Submitted: 'blue', Completed: 'green', Verified: 'green', Approved: 'green', Rejected: 'red', Returned: 'red',
-  Draft: 'gray', Coordinator_Reviewed: 'purple', Present: 'green', Absent: 'red', Late: 'amber', 'Half Day': 'purple', Leave: 'blue',
-  Active: 'green', Inactive: 'red', Overdue: 'red'
+  Pending: 'amber', Submitted: 'blue', Completed: 'green', Approved: 'green', Rejected: 'red', Returned: 'red',
+  Draft: 'gray', Coordinator_Reviewed: 'purple', Active: 'green', Inactive: 'red', Overdue: 'red'
 };
 
 // ==========================================
-// SHARED UI (toasts, confirm/prompt dialogs, small components)
+// SHARED UI
 // ==========================================
 const UIContext = createContext(null);
 const useUI = () => useContext(UIContext);
@@ -141,15 +191,17 @@ function UIProvider({ children }) {
         ))}
       </div>
       {dlg && (
-        <Modal title={dlg.kind === 'confirm' ? 'Please confirm' : dlg.message} onClose={() => close(dlg.kind === 'confirm' ? false : null)} width={420}>
-          {dlg.kind === 'confirm'
-            ? <p style={{ margin: '0 0 20px', color: '#334155' }}>{dlg.message}</p>
-            : <textarea autoFocus value={text} onChange={e => setText(e.target.value)} style={{ ...S.input, width: '100%', minHeight: 80, marginBottom: 20 }} />}
-          <div style={{ display: 'flex', gap: 10 }}>
-            <button onClick={() => close(dlg.kind === 'confirm' ? false : null)} style={{ flex: 1, padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}>Cancel</button>
-            <button onClick={() => close(dlg.kind === 'confirm' ? true : text)} style={{ flex: 1, padding: 10, borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>OK</button>
-          </div>
-        </Modal>
+        <div style={{ position: 'relative', zIndex: 3000 }}>
+          <Modal title={dlg.kind === 'confirm' ? 'Please confirm' : dlg.message} onClose={() => close(dlg.kind === 'confirm' ? false : null)} width={420}>
+            {dlg.kind === 'confirm'
+              ? <p style={{ margin: '0 0 20px', color: '#334155' }}>{dlg.message}</p>
+              : <textarea autoFocus value={text} onChange={e => setText(e.target.value)} style={{ ...S.input, width: '100%', minHeight: 80, marginBottom: 20 }} />}
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button onClick={() => close(dlg.kind === 'confirm' ? false : null)} style={{ flex: 1, padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}>Cancel</button>
+              <button onClick={() => close(dlg.kind === 'confirm' ? true : text)} style={{ flex: 1, padding: 10, borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontWeight: 700, cursor: 'pointer' }}>OK</button>
+            </div>
+          </Modal>
+        </div>
       )}
     </UIContext.Provider>
   );
@@ -214,6 +266,28 @@ function Bars({ items }) {
 }
 
 const Empty = ({ text = 'Nothing here yet.' }) => <p style={{ color: '#64748b', textAlign: 'center', padding: 20, margin: 0 }}>{text}</p>;
+
+function Tabs({ tabs, value, onChange }) {
+  return (
+    <div className="no-print" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      {tabs.map(([id, label]) => (
+        <button key={id} onClick={() => onChange(id)} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: value === id ? '#2563eb' : '#fff', color: value === id ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>{label}</button>
+      ))}
+    </div>
+  );
+}
+
+function SubSelect({ value, onChange, style }) {
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} style={style || S.input}>
+      {domains.map(d => (
+        <optgroup key={d.code} label={`${d.code} – ${d.name}`}>
+          {d.subs.map(s => <option key={s.code} value={s.code}>{s.code} – {s.name}</option>)}
+        </optgroup>
+      ))}
+    </select>
+  );
+}
 
 function useStaff(activeOnly = true) {
   const [list, setList] = useState([]);
@@ -375,16 +449,12 @@ function App() {
           {!profile && <Empty text="Loading profile..." />}
           {profile && page === 'dashboard' && <DashboardPage userRole={userRole} profile={profile} goto={setActive} />}
           {profile && page === 'announcements' && <AnnouncementsPage userRole={userRole} profile={profile} />}
-          {profile && page === 'scores' && <AllStaffScoresPage profile={profile} />}
+          {profile && page === 'scores' && <LeaderboardPage profile={profile} />}
           {profile && page === 'staff' && <StaffDirectoryPage currentUserRole={userRole} profile={profile} />}
-          {profile && page === 'attendance' && <AttendancePage userRole={userRole} profile={profile} />}
-          {profile && page === 'leave' && <LeavePage userRole={userRole} profile={profile} />}
-          {profile && page === 'duties' && <DutyAndTasksPage userRole={userRole} profile={profile} />}
-          {profile && page === 'evidence' && <EvidencePortfolioPage userRole={userRole} profile={profile} />}
+          {profile && page === 'work' && <WorkPage userRole={userRole} profile={profile} />}
           {profile && page === 'bonus' && <BonusPointsPage userRole={userRole} profile={profile} />}
-          {profile && page === 'appraisal' && <AppraisalWorkflowPage userRole={userRole} profile={profile} />}
+          {profile && page === 'appraisal' && <AppraisalPage userRole={userRole} profile={profile} />}
           {profile && page === 'reports' && <ReportsPage />}
-          {profile && page === 'activity' && <ActivityLogPage />}
           {profile && page === 'settings' && <AccountSettingsPage profile={profile} reloadProfile={() => loadProfile(profile.id)} />}
         </main>
       </div>
@@ -393,7 +463,7 @@ function App() {
 }
 
 // ==========================================
-// 1. LOGIN
+// LOGIN
 // ==========================================
 function Login({ email, setEmail, password, setPassword, onSubmit, error, loading }) {
   const [show, setShow] = useState(false);
@@ -421,37 +491,35 @@ function Login({ email, setEmail, password, setPassword, onSubmit, error, loadin
 }
 
 // ==========================================
-// 2. DASHBOARD (role based)
+// DASHBOARD
 // ==========================================
 function DashboardPage({ userRole, profile, goto }) {
   const isReviewer = userRole !== 'teacher';
+  const canManage = userRole === 'admin' || userRole === 'coordinator';
   const [d, setD] = useState(null);
 
   useEffect(() => {
     (async () => {
-      const today = todayStr(); const monthStart = today.slice(0, 8) + '01'; const id = profile.id;
-      const own = (q) => isReviewer ? q : q.eq('staff_id', id);
-      const [staff, duty, task, ev, ap, leave, att, ann, act] = await Promise.all([
+      const own = (q) => isReviewer ? q : q.eq('staff_id', profile.id);
+      const [staff, work, ap, ann] = await Promise.all([
         supabase.from('profiles').select('id, department').eq('active', true),
-        own(supabase.from('duty_records').select('status, end_date')),
-        own(supabase.from('special_tasks').select('status')),
-        own(supabase.from('evidence_files').select('status')),
+        own(supabase.from('work_items').select('staff_id, kind, status, due_date, month').eq('cycle', CYCLE)),
         own(supabase.from('appraisals').select('staff_id, status, final_score').eq('cycle', CYCLE)),
-        own(supabase.from('leave_requests').select('status')),
-        own(supabase.from('attendance').select('staff_id, status, date').gte('date', monthStart)),
-        supabase.from('announcements').select('*').order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(3),
-        userRole === 'admin' ? supabase.from('activity_log').select('*').order('created_at', { ascending: false }).limit(6) : Promise.resolve({ data: [] })
+        supabase.from('announcements').select('*').order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(3)
       ]);
-      setD({ staff: staff.data || [], duty: duty.data || [], task: task.data || [], ev: ev.data || [], ap: ap.data || [], leave: leave.data || [], att: att.data || [], ann: ann.data || [], act: act.data || [] });
+      setD({ staff: staff.data || [], work: work.data || [], ap: ap.data || [], ann: ann.data || [] });
     })();
   }, [profile.id, userRole]);
 
   if (!d) return <Empty text="Loading dashboard..." />;
 
-  const today = todayStr();
+  const today = todayStr(); const month = today.slice(0, 7);
   const n = (arr, fn) => arr.filter(fn).length;
-  const overdue = n(d.duty, x => x.status !== 'Completed' && x.end_date && x.end_date < today);
-  const awaiting = n(d.duty, x => x.status === 'Submitted') + n(d.task, x => x.status === 'Submitted');
+  const overdue = n(d.work, x => x.status !== 'Completed' && x.due_date && x.due_date < today);
+  const awaiting = n(d.work, x => x.status === 'Submitted');
+  const pending = n(d.work, x => x.status === 'Pending');
+  const cceMonth = d.work.filter(x => x.kind === 'cce' && x.month === month);
+  const cceDone = n(cceMonth, x => x.status === 'Completed');
 
   const announcements = (
     <div style={S.card}>
@@ -467,47 +535,36 @@ function DashboardPage({ userRole, profile, goto }) {
     </div>
   );
 
-  // ---------- TEACHER VIEW ----------
   if (!isReviewer) {
     const mine = d.ap[0];
-    const present = n(d.att, x => x.status === 'Present' || x.status === 'Late');
-    const rejected = n(d.ev, x => x.status === 'Rejected');
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-        {(rejected > 0 || mine?.status === 'Returned') && (
+        {(overdue > 0 || mine?.status === 'Returned') && (
           <div style={{ background: '#fee2e2', color: '#991b1b', padding: 14, borderRadius: 10, fontWeight: 600 }}>
-            ⚠ Action needed: {rejected > 0 && `${rejected} evidence file(s) rejected. `}{mine?.status === 'Returned' && 'Your appraisal was returned for edits.'}
+            ⚠ Action needed: {overdue > 0 && `${overdue} work item(s) overdue. `}{mine?.status === 'Returned' && 'Your appraisal was returned for edits.'}
           </div>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 20 }}>
-          <StatCard label="My Pending Duties" value={n(d.duty, x => x.status === 'Pending')} color="#d97706" onClick={() => goto('duties')} sub={overdue ? `${overdue} overdue` : undefined} />
-          <StatCard label="My Pending Tasks" value={n(d.task, x => x.status === 'Pending')} color="#db2777" onClick={() => goto('duties')} />
-          <StatCard label="Evidence Verified" value={`${n(d.ev, x => x.status === 'Verified')}/${d.ev.length}`} color="#16a34a" onClick={() => goto('evidence')} />
+          <StatCard label="My Pending Work" value={pending} color="#d97706" onClick={() => goto('work')} sub={overdue ? `${overdue} overdue` : undefined} />
+          <StatCard label="Waiting for Approval" value={awaiting} color="#7c3aed" onClick={() => goto('work')} />
+          <StatCard label="Completed Work" value={`${n(d.work, x => x.status === 'Completed')}/${d.work.length}`} color="#16a34a" onClick={() => goto('work')} />
+          <StatCard label={`CCE – ${monthLabel(month)}`} value={`${cceDone}/${cceMonth.length}`} color="#0d9488" onClick={() => goto('work')} sub="done this month" />
           <StatCard label="My Appraisal" value={mine ? mine.status.replaceAll('_', ' ') : 'Not started'} color="#2563eb" sub={mine ? `Score ${Number(mine.final_score || 0).toFixed(1)}` : undefined} onClick={() => goto('appraisal')} />
-          <StatCard label="Present Days (This Month)" value={present} color="#0d9488" onClick={() => goto('attendance')} />
-          <StatCard label="Pending Leave Requests" value={n(d.leave, x => x.status === 'Pending')} color="#7c3aed" onClick={() => goto('leave')} />
         </div>
         {announcements}
       </div>
     );
   }
 
-  // ---------- REVIEWER VIEW ----------
   const toReview = userRole === 'coordinator' ? n(d.ap, a => a.status === 'Submitted')
     : userRole === 'appraisal_authority' ? n(d.ap, a => a.status === 'Coordinator_Reviewed')
     : n(d.ap, a => a.status === 'Submitted' || a.status === 'Coordinator_Reviewed');
-  const evPending = n(d.ev, x => x.status === 'Pending');
-  const leavePending = n(d.leave, x => x.status === 'Pending');
-  const presentToday = n(d.att, a => a.date === today && (a.status === 'Present' || a.status === 'Late'));
-  const markedToday = n(d.att, a => a.date === today);
 
   const actions = [
-    { n: evPending, text: 'evidence files waiting for verification', page: 'evidence' },
+    { n: awaiting, text: 'work items submitted and waiting for approval', page: 'work' },
     { n: toReview, text: 'appraisals waiting for your review', page: 'appraisal' },
-    { n: awaiting, text: 'duties/tasks submitted for approval', page: 'duties' },
-    { n: leavePending, text: 'leave requests pending', page: 'leave' },
-    { n: overdue, text: 'duties are overdue', page: 'duties' },
-    { n: n(d.ev, x => x.status === 'Pending') === 0 && markedToday === 0 && d.staff.length ? 1 : 0, text: "today's attendance is not marked yet", page: 'attendance' }
+    { n: overdue, text: 'work items are overdue', page: 'work' },
+    { n: canManage && cceMonth.length === 0 && d.staff.length ? 1 : 0, text: `CCE works for ${monthLabel(month)} are not generated yet`, page: 'work' }
   ].filter(a => a.n > 0);
 
   const statusCounts = ['Draft', 'Submitted', 'Coordinator_Reviewed', 'Returned', 'Approved'].map(s => ({ label: s.replaceAll('_', ' '), value: n(d.ap, a => a.status === s), max: d.staff.length, color: s === 'Approved' ? '#16a34a' : s === 'Returned' ? '#ef4444' : '#2563eb' }));
@@ -522,14 +579,11 @@ function DashboardPage({ userRole, profile, goto }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 20 }}>
         <StatCard label="Total Active Staff" value={d.staff.length} onClick={() => goto('staff')} />
-        <StatCard label="Present Today" value={`${presentToday}/${d.staff.length}`} color="#0d9488" onClick={() => goto('attendance')} sub={`${markedToday} marked`} />
-        <StatCard label="Pending Duties" value={n(d.duty, x => x.status === 'Pending')} color="#d97706" onClick={() => goto('duties')} sub={overdue ? `${overdue} overdue` : undefined} />
-        <StatCard label="Pending Tasks" value={n(d.task, x => x.status === 'Pending')} color="#db2777" onClick={() => goto('duties')} />
-        <StatCard label="Awaiting Approval" value={awaiting} color="#7c3aed" onClick={() => goto('duties')} sub="duties + tasks" />
-        <StatCard label="Evidence To Review" value={evPending} color="#ea580c" onClick={() => goto('evidence')} />
+        <StatCard label="Pending Work" value={pending} color="#d97706" onClick={() => goto('work')} sub={overdue ? `${overdue} overdue` : undefined} />
+        <StatCard label="Awaiting Approval" value={awaiting} color="#7c3aed" onClick={() => goto('work')} />
+        <StatCard label={`CCE – ${monthLabel(month)}`} value={`${cceDone}/${cceMonth.length}`} color="#0d9488" onClick={() => goto('work')} sub="completed" />
         <StatCard label="Appraisals To Review" value={toReview} color="#2563eb" onClick={() => goto('appraisal')} />
         <StatCard label="Appraisals Approved" value={n(d.ap, a => a.status === 'Approved')} color="#16a34a" onClick={() => goto('appraisal')} />
-        <StatCard label="Leave Requests" value={leavePending} color="#4f46e5" onClick={() => goto('leave')} sub="pending" />
       </div>
 
       <div style={S.card}>
@@ -546,28 +600,13 @@ function DashboardPage({ userRole, profile, goto }) {
         <div style={S.card}><h3 style={{ marginTop: 0 }}>Appraisal Progress</h3><Bars items={statusCounts} /></div>
         <div style={S.card}><h3 style={{ marginTop: 0 }}>Department Average (Approved)</h3>{deptBars.length ? <Bars items={deptBars} /> : <Empty text="No approved appraisals yet." />}</div>
       </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
-        {announcements}
-        {userRole === 'admin' && (
-          <div style={S.card}>
-            <h3 style={{ marginTop: 0 }}>Recent Activity</h3>
-            {d.act.length === 0 ? <Empty text="No activity logged." /> : d.act.map(a => (
-              <div key={a.id} style={{ padding: '8px 0', borderBottom: '1px solid #f1f5f9', fontSize: 13 }}>
-                <b>{a.actor_name}</b> — {a.action} <span style={{ color: '#64748b' }}>{a.details}</span>
-                <div style={{ fontSize: 11, color: '#94a3b8' }}>{new Date(a.created_at).toLocaleString()}</div>
-              </div>
-            ))}
-            <button onClick={() => goto('activity')} style={{ ...S.sm('#2563eb'), marginTop: 12 }}>Full log</button>
-          </div>
-        )}
-      </div>
+      {announcements}
     </div>
   );
 }
 
 // ==========================================
-// 3. ANNOUNCEMENTS
+// ANNOUNCEMENTS
 // ==========================================
 function AnnouncementsPage({ userRole, profile }) {
   const canPost = userRole !== 'teacher';
@@ -586,14 +625,14 @@ function AnnouncementsPage({ userRole, profile }) {
     e.preventDefault();
     const { error } = await supabase.from('announcements').insert({ title: form.title.trim(), body: form.body.trim(), pinned: !!form.pinned, author_id: profile.id, author_name: profile.full_name });
     if (error) return toast(error.message, 'error');
-    toast('Announcement posted'); logActivity(profile, 'Posted announcement', form.title); setForm(null); load();
+    toast('Announcement posted'); setForm(null); load();
   };
   const togglePin = async (a) => { const { error } = await supabase.from('announcements').update({ pinned: !a.pinned }).eq('id', a.id); if (error) toast(error.message, 'error'); else load(); };
   const remove = async (a) => {
     if (!(await confirm(`Delete "${a.title}"?`))) return;
     const { error } = await supabase.from('announcements').delete().eq('id', a.id);
     if (error) return toast(error.message, 'error');
-    toast('Deleted'); logActivity(profile, 'Deleted announcement', a.title); load();
+    toast('Deleted'); load();
   };
 
   return (
@@ -630,7 +669,7 @@ function AnnouncementsPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 4. STAFF LEADERBOARD
+// LEADERBOARD
 // ==========================================
 function PodiumCard({ p, place }) {
   const c = {
@@ -651,14 +690,14 @@ function PodiumCard({ p, place }) {
   );
 }
 
-function AllStaffScoresPage({ profile }) {
+function LeaderboardPage({ profile }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
   const [dept, setDept] = useState('all');
 
   useEffect(() => {
-    async function fetchScores() {
+    (async () => {
       const { data: staff } = await supabase.from('profiles').select('id, full_name, department, avatar_url').eq('active', true);
       const { data: appr } = await supabase.from('appraisals').select('staff_id, final_score').eq('status', 'Approved').eq('cycle', CYCLE);
       const { data: points } = await supabase.from('special_point_entries').select('staff_id, points_approved').eq('status', 'Approved');
@@ -671,8 +710,7 @@ function AllStaffScoresPage({ profile }) {
       scores.sort((a, b) => b.totalEarned - a.totalEarned);
       scores.forEach((s, i) => { s.rank = i + 1; });
       setData(scores); setLoading(false);
-    }
-    fetchScores();
+    })();
   }, []);
 
   const depts = [...new Set(data.map(s => s.department).filter(Boolean))].sort();
@@ -681,10 +719,7 @@ function AllStaffScoresPage({ profile }) {
   const top3 = filtering ? [] : filtered.slice(0, 3);
   const rest = filtering ? filtered : filtered.slice(3);
 
-  function exportCSV() {
-    if (!data.length) return;
-    downloadCSV(`Staff_Leaderboard_${CYCLE}.csv`, ['Rank', 'Staff Name', 'Department', 'Official Appraisal (Max 100)', 'Bonus Points'], filtered.map(r => [r.rank, r.full_name, r.department || '-', r.officialScore.toFixed(2), r.bonus]));
-  }
+  const exportCSV = () => data.length && downloadCSV(`Staff_Leaderboard_${CYCLE}.csv`, ['Rank', 'Staff Name', 'Department', 'Official Appraisal (Max 100)', 'Bonus Points'], filtered.map(r => [r.rank, r.full_name, r.department || '-', r.officialScore.toFixed(2), r.bonus]));
 
   if (loading) return <Empty text="Loading scores..." />;
 
@@ -738,7 +773,7 @@ function AllStaffScoresPage({ profile }) {
 }
 
 // ==========================================
-// 5. STAFF DIRECTORY
+// STAFF DIRECTORY
 // ==========================================
 function StaffDirectoryPage({ currentUserRole, profile }) {
   const { toast, confirm } = useUI();
@@ -770,7 +805,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
       body: { full_name: formData.full_name.trim(), email: finalEmail, staff_code: formData.staff_code.trim(), department: formData.department.trim(), designation: formData.designation.trim(), role: formData.role }
     });
     if (error) return toast('Error: ' + error.message, 'error');
-    toast('✅ Staff created!'); logActivity(profile, 'Created staff', formData.full_name);
+    toast('✅ Staff created!');
     setAddOpen(false); setFormData(emptyForm); fetchStaff();
   }
 
@@ -780,14 +815,14 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
     if (isAdmin) payload.role = edit.role;
     const { error } = await supabase.from('profiles').update(payload).eq('id', edit.id);
     if (error) return toast(error.message, 'error');
-    toast('Staff updated'); logActivity(profile, 'Edited staff', edit.full_name); setEdit(null); fetchStaff();
+    toast('Staff updated'); setEdit(null); fetchStaff();
   }
 
   async function updateRole(s, newRole) {
     if (!isAdmin) return toast('Only admins can change roles.', 'error');
     if (s.id === profile.id && newRole !== 'admin' && !(await confirm('You are removing your own admin access. Continue?'))) return;
     const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', s.id);
-    if (error) toast(error.message, 'error'); else { logActivity(profile, 'Changed role', `${s.full_name} → ${newRole}`); fetchStaff(); }
+    if (error) toast(error.message, 'error'); else fetchStaff();
   }
 
   async function toggleActive(s) {
@@ -796,7 +831,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
     if (!(await confirm(`${next ? 'Activate' : 'Deactivate'} ${s.full_name}?`))) return;
     const { error } = await supabase.from('profiles').update({ active: next }).eq('id', s.id);
     if (error) return toast(error.message, 'error');
-    logActivity(profile, next ? 'Activated staff' : 'Deactivated staff', s.full_name); fetchStaff();
+    fetchStaff();
   }
 
   async function handlePhotoUpload(e) {
@@ -820,6 +855,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
     filtered.map(s => [s.full_name, s.email, s.staff_code, s.department, s.designation, s.role, s.active === false ? 'No' : 'Yes']));
 
   const inp = (k, ph, obj, set, req = true) => <input placeholder={ph} value={obj[k] || ''} onChange={e => set({ ...obj, [k]: e.target.value })} required={req} style={S.input} />;
+  const roleOptions = (withAdmin) => <><option value="teacher">Teacher</option><option value="coordinator">Coordinator</option><option value="appraisal_authority">Appraisal Authority</option>{withAdmin && <option value="admin">Admin</option>}</>;
 
   return (
     <div style={S.card}>
@@ -835,9 +871,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
         <SearchBox value={q} onChange={setQ} placeholder="Search name, ID, code..." />
-        <select value={roleF} onChange={e => setRoleF(e.target.value)} style={S.input}>
-          <option value="all">All roles</option><option value="teacher">Teacher</option><option value="coordinator">Coordinator</option><option value="appraisal_authority">Appraisal Authority</option><option value="admin">Admin</option>
-        </select>
+        <select value={roleF} onChange={e => setRoleF(e.target.value)} style={S.input}><option value="all">All roles</option>{roleOptions(true)}</select>
         <select value={deptF} onChange={e => setDeptF(e.target.value)} style={S.input}><option value="all">All departments</option>{depts.map(x => <option key={x}>{x}</option>)}</select>
         <select value={statusF} onChange={e => setStatusF(e.target.value)} style={S.input}><option value="active">Active</option><option value="inactive">Inactive</option><option value="all">All</option></select>
       </div>
@@ -850,9 +884,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
             {inp('staff_code', 'Staff Code', formData, setFormData)}
             {inp('department', 'Department', formData, setFormData)}
             {inp('designation', 'Designation', formData, setFormData)}
-            <select value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value })} style={S.input}>
-              <option value="teacher">Teacher</option><option value="coordinator">Coordinator</option><option value="appraisal_authority">Appraisal Authority</option>
-            </select>
+            <select value={formData.role} onChange={e => setFormData({ ...formData, role: e.target.value })} style={S.input}>{roleOptions(false)}</select>
             <button type="submit" style={S.btn('#2563eb', { justifyContent: 'center' })}>Create Account</button>
           </form>
         </Modal>
@@ -865,11 +897,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
             {inp('staff_code', 'Staff Code', edit, setEdit, false)}
             {inp('department', 'Department', edit, setEdit, false)}
             {inp('designation', 'Designation', edit, setEdit, false)}
-            {isAdmin && (
-              <select value={edit.role} onChange={e => setEdit({ ...edit, role: e.target.value })} style={S.input}>
-                <option value="teacher">Teacher</option><option value="coordinator">Coordinator</option><option value="appraisal_authority">Appraisal Authority</option><option value="admin">Admin</option>
-              </select>
-            )}
+            {isAdmin && <select value={edit.role} onChange={e => setEdit({ ...edit, role: e.target.value })} style={S.input}>{roleOptions(true)}</select>}
             <button type="submit" style={S.btn('#2563eb', { justifyContent: 'center' })}>Save changes</button>
           </form>
         </Modal>
@@ -895,9 +923,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
               </td>
               <td style={S.td}>
                 {isAdmin ? (
-                  <select value={s.role} onChange={e => updateRole(s, e.target.value)} style={{ padding: 6, borderRadius: 6, border: '1px solid #cbd5e1', background: '#f8fafc' }}>
-                    <option value="teacher">Teacher</option><option value="coordinator">Coordinator</option><option value="appraisal_authority">Appraisal Authority</option><option value="admin">Admin</option>
-                  </select>
+                  <select value={s.role} onChange={e => updateRole(s, e.target.value)} style={{ padding: 6, borderRadius: 6, border: '1px solid #cbd5e1', background: '#f8fafc' }}>{roleOptions(true)}</select>
                 ) : <span style={{ textTransform: 'capitalize' }}>{s.role.replaceAll('_', ' ')}</span>}
               </td>
               <td style={S.td}>{s.department || '-'}</td>
@@ -921,29 +947,22 @@ function StaffProfileModal({ s, onClose }) {
   const [d, setD] = useState(null);
   useEffect(() => {
     (async () => {
-      const monthStart = todayStr().slice(0, 8) + '01';
       const id = s.id;
-      const [ap, pts, ev, du, ta, att, lv] = await Promise.all([
+      const [ap, pts, wk, sb] = await Promise.all([
         supabase.from('appraisals').select('status, final_score').eq('staff_id', id).eq('cycle', CYCLE).maybeSingle(),
         supabase.from('special_point_entries').select('points_approved').eq('staff_id', id).eq('status', 'Approved'),
-        supabase.from('evidence_files').select('status').eq('staff_id', id),
-        supabase.from('duty_records').select('status').eq('staff_id', id),
-        supabase.from('special_tasks').select('status').eq('staff_id', id),
-        supabase.from('attendance').select('status').eq('staff_id', id).gte('date', monthStart),
-        supabase.from('leave_requests').select('status').eq('staff_id', id)
+        supabase.from('work_items').select('kind, status, due_date').eq('staff_id', id).eq('cycle', CYCLE),
+        supabase.from('staff_subjects').select('name').eq('staff_id', id)
       ]);
-      setD({ ap: ap.data, bonus: (pts.data || []).reduce((a, b) => a + Number(b.points_approved || 0), 0), ev: ev.data || [], du: du.data || [], ta: ta.data || [], att: att.data || [], lv: lv.data || [] });
+      setD({ ap: ap.data, bonus: (pts.data || []).reduce((a, b) => a + Number(b.points_approved || 0), 0), wk: wk.data || [], subs: sb.data || [] });
     })();
   }, [s.id]);
-  const n = (a, st) => a.filter(x => x.status === st).length;
+  const line = (kind) => { const a = d.wk.filter(x => x.kind === kind); const done = a.filter(x => x.status === 'Completed').length; const od = a.filter(x => x.status !== 'Completed' && x.due_date && x.due_date < todayStr()).length; return `${done}/${a.length} completed${od ? ` • ${od} overdue` : ''}`; };
   const rows = d ? [
     ['Appraisal', d.ap ? `${d.ap.status.replaceAll('_', ' ')} (${Number(d.ap.final_score || 0).toFixed(1)})` : 'Not started'],
     ['Bonus points', d.bonus],
-    ['Evidence', `${n(d.ev, 'Verified')} verified / ${n(d.ev, 'Pending')} pending / ${n(d.ev, 'Rejected')} rejected`],
-    ['Duties', `${n(d.du, 'Completed')} completed / ${d.du.length - n(d.du, 'Completed')} open`],
-    ['Special tasks', `${n(d.ta, 'Completed')} completed / ${d.ta.length - n(d.ta, 'Completed')} open`],
-    ['Attendance (this month)', `${n(d.att, 'Present')} present, ${n(d.att, 'Late')} late, ${n(d.att, 'Absent')} absent, ${n(d.att, 'Leave')} leave`],
-    ['Leave requests', `${n(d.lv, 'Approved')} approved / ${n(d.lv, 'Pending')} pending`]
+    ['Subjects', d.subs.length ? d.subs.map(x => x.name).join(', ') : '-'],
+    ['CCE works', line('cce')], ['Weekly duties', line('duty')], ['Special tasks', line('task')]
   ] : [];
   return (
     <Modal title="Staff Profile" onClose={onClose} width={520}>
@@ -965,131 +984,75 @@ function StaffProfileModal({ s, onClose }) {
 }
 
 // ==========================================
-// 6. ATTENDANCE
+// WORK: CCE + WEEKLY DUTIES + SPECIAL TASKS + SUBJECTS
+// Every work item belongs to a sub-domain (and so to a domain) and feeds the appraisal marks.
 // ==========================================
-const ATT = ['Present', 'Absent', 'Late', 'Half Day', 'Leave'];
-
-function AttendancePage({ userRole, profile }) {
-  const canMark = userRole === 'admin' || userRole === 'coordinator';
-  const isTeacher = userRole === 'teacher';
-  const [tab, setTab] = useState(isTeacher ? 'my' : 'daily');
-  const tabs = [['my', 'My Attendance'], ...(!isTeacher ? [['daily', 'Daily Register'], ['summary', 'Monthly Summary']] : [])];
+function WorkPage({ userRole, profile }) {
+  const canManage = userRole === 'admin' || userRole === 'coordinator';
+  const [tab, setTab] = useState('cce');
+  const { list: staffList } = useStaff();
+  const tabs = [['cce', 'CCE Works'], ['duty', 'Weekly Duties'], ['task', 'Special Tasks'], ...(canManage ? [['subjects', 'Subjects']] : [])];
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {tabs.map(([id, label]) => <button key={id} onClick={() => setTab(id)} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: tab === id ? '#2563eb' : '#fff', color: tab === id ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>{label}</button>)}
-      </div>
-      {tab === 'my' && <MyAttendance profile={profile} />}
-      {tab === 'daily' && <AttendanceDaily canMark={canMark} profile={profile} />}
-      {tab === 'summary' && <AttendanceSummary />}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      <Tabs tabs={tabs} value={tab} onChange={setTab} />
+      {tab === 'subjects'
+        ? <SubjectsTab staffList={staffList} />
+        : <WorkTable key={tab} kind={tab} userRole={userRole} profile={profile} staffList={staffList} />}
     </div>
   );
 }
 
-function MyAttendance({ profile }) {
-  const { toast } = useUI();
-  const [month, setMonth] = useState(todayStr().slice(0, 7));
-  const [rows, setRows] = useState([]);
-  const load = async () => {
-    const { data } = await supabase.from('attendance').select('*').eq('staff_id', profile.id).gte('date', `${month}-01`).lte('date', `${month}-${lastDayOf(month)}`).order('date', { ascending: false });
-    setRows(data || []);
-  };
-  useEffect(() => { load(); }, [month]);
-
-  const isCurrent = month === todayStr().slice(0, 7);
-  const today = rows.find(r => r.date === todayStr());
-  const count = (s) => rows.filter(r => r.status === s).length;
-
-  async function checkIn() {
-    const now = new Date(); const t = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const { error } = await supabase.from('attendance').insert({ staff_id: profile.id, date: todayStr(), status: t > LATE_AFTER ? 'Late' : 'Present', check_in: t, marked_by: profile.id });
-    if (error) return toast(error.message, 'error');
-    toast(`Checked in at ${t}`); load();
-  }
-
-  return (
-    <div style={S.card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
-        <div>
-          <h3 style={{ margin: 0 }}>Today: {fmtDate(todayStr())}</h3>
-          {isCurrent && (today ? <div style={{ marginTop: 8 }}><Badge text={today.status} /> {today.check_in && <span style={{ fontSize: 13, color: '#64748b' }}>at {today.check_in}</span>}</div>
-            : <button onClick={checkIn} style={{ ...S.btn('#16a34a'), marginTop: 8 }}><CalendarCheck size={16} /> Check In Now</button>)}
-        </div>
-        <input type="month" value={month} onChange={e => setMonth(e.target.value)} style={S.input} />
-      </div>
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-        {ATT.map(s => <div key={s} style={{ padding: '8px 14px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}><Badge text={s} /> <b style={{ marginLeft: 6 }}>{count(s)}</b></div>)}
-      </div>
-      {rows.length === 0 ? <Empty text="No attendance records this month." /> : (
-        <Table heads={['Date', 'Status', 'Check-in', 'Remarks']} min={400}>
-          {rows.map(r => <tr key={r.id} style={S.row}><td style={S.td}>{fmtDate(r.date)}</td><td style={S.td}><Badge text={r.status} /></td><td style={S.td}>{r.check_in || '-'}</td><td style={S.td}>{r.remarks || '-'}</td></tr>)}
-        </Table>
-      )}
-    </div>
-  );
-}
-
-function AttendanceDaily({ canMark, profile }) {
-  const { toast } = useUI();
-  const [date, setDate] = useState(todayStr());
-  const [staff, setStaff] = useState([]);
-  const [recs, setRecs] = useState({});
-  const [dirty, setDirty] = useState({});
-  const [saving, setSaving] = useState(false);
+function SubjectsTab({ staffList }) {
+  const { toast, confirm } = useUI();
+  const [subs, setSubs] = useState([]);
+  const [draft, setDraft] = useState({});
+  const [q, setQ] = useState('');
 
   const load = async () => {
-    const [{ data: st }, { data: at }] = await Promise.all([
-      supabase.from('profiles').select('id, full_name, department, avatar_url').eq('active', true).order('full_name'),
-      supabase.from('attendance').select('*').eq('date', date)
-    ]);
-    setStaff(st || []);
-    setRecs(Object.fromEntries((at || []).map(a => [a.staff_id, { status: a.status, remarks: a.remarks || '' }])));
-    setDirty({});
+    const { data, error } = await supabase.from('staff_subjects').select('*').order('name');
+    if (error) toast(error.message, 'error');
+    setSubs(data || []);
   };
-  useEffect(() => { load(); }, [date]);
+  useEffect(() => { load(); }, []);
 
-  const setRec = (id, patch) => { setRecs(p => ({ ...p, [id]: { ...p[id], ...patch } })); setDirty(p => ({ ...p, [id]: true })); };
-  const markAllPresent = () => staff.forEach(s => { if (!recs[s.id]?.status) setRec(s.id, { status: 'Present' }); });
-
-  async function save() {
-    const rows = Object.keys(dirty).filter(id => recs[id]?.status).map(id => ({ staff_id: id, date, status: recs[id].status, remarks: recs[id].remarks || null, marked_by: profile.id }));
-    if (!rows.length) return toast('Nothing to save', 'error');
-    setSaving(true);
-    const { error } = await supabase.from('attendance').upsert(rows, { onConflict: 'staff_id,date' });
-    setSaving(false);
-    if (error) return toast(error.message, 'error');
-    toast(`Saved ${rows.length} record(s)`); logActivity(profile, 'Marked attendance', `${date} (${rows.length})`); load();
+  async function add(staffId) {
+    const name = (draft[staffId] || '').trim();
+    if (!name) return;
+    if (subs.filter(x => x.staff_id === staffId).length >= MAX_SUBJECTS) return toast(`A staff member can have at most ${MAX_SUBJECTS} subjects.`, 'error');
+    const { error } = await supabase.from('staff_subjects').insert({ staff_id: staffId, name });
+    if (error) return toast(error.code === '23505' ? 'This subject is already added.' : error.message, 'error');
+    setDraft(p => ({ ...p, [staffId]: '' })); load();
+  }
+  async function remove(sub) {
+    if (!(await confirm(`Remove "${sub.name}"? Existing CCE records are kept.`))) return;
+    const { error } = await supabase.from('staff_subjects').delete().eq('id', sub.id);
+    if (error) toast(error.message, 'error'); else load();
   }
 
-  const count = (s) => staff.filter(x => recs[x.id]?.status === s).length;
-
+  const shown = staffList.filter(s => s.full_name.toLowerCase().includes(q.toLowerCase()));
   return (
     <div style={S.card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
-        <input type="date" value={date} max={todayStr()} onChange={e => setDate(e.target.value)} style={S.input} />
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {ATT.map(s => <span key={s} style={{ fontSize: 13 }}><Badge text={s} /> <b>{count(s)}</b></span>)}
-          <span style={{ fontSize: 13, color: '#64748b' }}>Unmarked <b>{staff.length - staff.filter(x => recs[x.id]?.status).length}</b></span>
-        </div>
-        {canMark && <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={markAllPresent} style={S.btn('#64748b')}>Mark unmarked as Present</button>
-          <button onClick={save} disabled={saving} style={S.btn('#16a34a')}>{saving ? 'Saving...' : 'Save'}</button>
-        </div>}
-      </div>
-      <Table heads={['Staff', 'Status', 'Remarks']} min={640}>
-        {staff.map(s => {
-          const r = recs[s.id] || {};
+      <h3 style={{ marginTop: 0 }}>Subjects of each staff member</h3>
+      <p style={{ color: '#64748b', fontSize: 13, marginTop: 0 }}>Add up to {MAX_SUBJECTS} subjects per staff member. Each month, one CCE work is generated for every subject.</p>
+      <div style={{ display: 'flex', marginBottom: 12 }}><SearchBox value={q} onChange={setQ} placeholder="Search staff..." /></div>
+      <Table heads={['Staff', 'Subjects', 'Add subject']} min={720}>
+        {shown.map(s => {
+          const mine = subs.filter(x => x.staff_id === s.id);
           return (
             <tr key={s.id} style={S.row}>
-              <td style={S.td}><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><Avatar url={s.avatar_url} name={s.full_name} size={32} /><div><div style={{ fontWeight: 500 }}>{s.full_name}</div><div style={{ fontSize: 11, color: '#94a3b8' }}>{s.department || ''}</div></div></div></td>
+              <td style={{ ...S.td, fontWeight: 500 }}>{s.full_name}<div style={{ fontSize: 11, color: '#94a3b8' }}>{s.department}</div></td>
               <td style={S.td}>
-                {canMark ? (
-                  <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                    {ATT.map(a => { const on = r.status === a; const [bg, fg] = TONES[STATUS_TONE[a]]; return <button key={a} onClick={() => setRec(s.id, { status: a })} style={{ padding: '5px 9px', borderRadius: 6, border: on ? `2px solid ${fg}` : '1px solid #cbd5e1', background: on ? bg : '#fff', color: on ? fg : '#64748b', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>{a}</button>; })}
-                  </div>
-                ) : (r.status ? <Badge text={r.status} /> : <span style={{ color: '#94a3b8' }}>Not marked</span>)}
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {mine.map(m => <span key={m.id} style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 12, padding: '3px 10px', fontSize: 12, fontWeight: 600 }}>{m.name} <span onClick={() => remove(m)} style={{ cursor: 'pointer', marginLeft: 4 }}>×</span></span>)}
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>{mine.length}/{MAX_SUBJECTS}</span>
+                </div>
               </td>
-              <td style={S.td}>{canMark ? <input value={r.remarks || ''} onChange={e => setRec(s.id, { remarks: e.target.value })} placeholder="Remarks" style={{ ...S.input, width: '100%', padding: 6 }} /> : (r.remarks || '-')}</td>
+              <td style={S.td}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <input value={draft[s.id] || ''} onChange={e => setDraft(p => ({ ...p, [s.id]: e.target.value }))} onKeyDown={e => e.key === 'Enter' && add(s.id)} placeholder="e.g. Fiqh" style={{ ...S.input, padding: 6, width: 140 }} />
+                  <button onClick={() => add(s.id)} style={S.sm('#2563eb')}>Add</button>
+                </div>
+              </td>
             </tr>
           );
         })}
@@ -1098,407 +1061,285 @@ function AttendanceDaily({ canMark, profile }) {
   );
 }
 
-function AttendanceSummary() {
-  const [month, setMonth] = useState(todayStr().slice(0, 7));
-  const [staff, setStaff] = useState([]);
-  const [rows, setRows] = useState([]);
-  useEffect(() => {
-    (async () => {
-      const [{ data: st }, { data: at }] = await Promise.all([
-        supabase.from('profiles').select('id, full_name, department').eq('active', true).order('full_name'),
-        supabase.from('attendance').select('staff_id, status').gte('date', `${month}-01`).lte('date', `${month}-${lastDayOf(month)}`)
-      ]);
-      setStaff(st || []); setRows(at || []);
-    })();
-  }, [month]);
-
-  const data = staff.map(s => {
-    const mine = rows.filter(r => r.staff_id === s.id);
-    const c = (st) => mine.filter(r => r.status === st).length;
-    const denom = mine.length - c('Leave');
-    const pct = denom > 0 ? ((c('Present') + c('Late') + c('Half Day') * 0.5) / denom) * 100 : null;
-    return { ...s, present: c('Present'), late: c('Late'), half: c('Half Day'), leave: c('Leave'), absent: c('Absent'), pct };
-  });
-  const exportIt = () => downloadCSV(`Attendance_${month}.csv`, ['Staff', 'Department', 'Present', 'Late', 'Half Day', 'Leave', 'Absent', 'Attendance %'], data.map(r => [r.full_name, r.department, r.present, r.late, r.half, r.leave, r.absent, r.pct === null ? '' : r.pct.toFixed(1)]));
-
-  return (
-    <div style={S.card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <input type="month" value={month} onChange={e => setMonth(e.target.value)} style={S.input} />
-        <button onClick={exportIt} style={S.btn('#16a34a')}><Download size={16} /> Export CSV</button>
-      </div>
-      <Table heads={['Staff', 'Present', 'Late', 'Half Day', 'Leave', 'Absent', 'Attendance %']} min={700}>
-        {data.map(r => (
-          <tr key={r.id} style={S.row}>
-            <td style={{ ...S.td, fontWeight: 500 }}>{r.full_name}<div style={{ fontSize: 11, color: '#94a3b8' }}>{r.department}</div></td>
-            <td style={S.td}>{r.present}</td><td style={S.td}>{r.late}</td><td style={S.td}>{r.half}</td><td style={S.td}>{r.leave}</td>
-            <td style={{ ...S.td, color: r.absent > 0 ? '#ef4444' : 'inherit', fontWeight: r.absent > 0 ? 700 : 400 }}>{r.absent}</td>
-            <td style={{ ...S.td, fontWeight: 700, color: r.pct === null ? '#94a3b8' : r.pct < 75 ? '#ef4444' : '#16a34a' }}>{r.pct === null ? '-' : `${r.pct.toFixed(1)}%`}</td>
-          </tr>
-        ))}
-      </Table>
-    </div>
-  );
-}
-
-// ==========================================
-// 7. LEAVE REQUESTS
-// ==========================================
-function LeavePage({ userRole, profile }) {
-  const reviewer = ['admin', 'coordinator', 'appraisal_authority'].includes(userRole);
-  const { toast, confirm, ask } = useUI();
-  const { map } = useStaff(false);
-  const [tab, setTab] = useState('mine');
-  const [rows, setRows] = useState([]);
-  const [statusF, setStatusF] = useState('Pending');
-  const [form, setForm] = useState(null);
-
-  const load = async () => {
-    let q = supabase.from('leave_requests').select('*').order('created_at', { ascending: false });
-    if (tab === 'mine') q = q.eq('staff_id', profile.id);
-    const { data, error } = await q;
-    if (error) toast(error.message, 'error');
-    setRows(data || []);
-  };
-  useEffect(() => { load(); }, [tab]);
-
-  async function submit(e) {
-    e.preventDefault();
-    if (form.to_date < form.from_date) return toast('End date is before start date.', 'error');
-    const { error } = await supabase.from('leave_requests').insert({ staff_id: profile.id, leave_type: form.leave_type, from_date: form.from_date, to_date: form.to_date, reason: form.reason, status: 'Pending' });
-    if (error) return toast(error.message, 'error');
-    toast('Leave request submitted'); logActivity(profile, 'Applied leave', `${form.from_date} → ${form.to_date}`); setForm(null); load();
-  }
-
-  async function cancel(r) {
-    if (!(await confirm('Cancel this leave request?'))) return;
-    const { error } = await supabase.from('leave_requests').delete().eq('id', r.id);
-    if (error) toast(error.message, 'error'); else { toast('Cancelled'); load(); }
-  }
-
-  async function decide(r, status) {
-    let remarks = null;
-    if (status === 'Rejected') { remarks = await ask('Reason for rejection'); if (!remarks) return; }
-    else if (!(await confirm('Approve this leave? Attendance will be marked as "Leave" for these days (Sundays skipped).'))) return;
-    const { error } = await supabase.from('leave_requests').update({ status, reviewer_remarks: remarks, reviewed_by: profile.id }).eq('id', r.id);
-    if (error) return toast(error.message, 'error');
-    if (status === 'Approved') {
-      const att = dateRange(r.from_date, r.to_date).map(date => ({ staff_id: r.staff_id, date, status: 'Leave', remarks: `${r.leave_type} leave`, marked_by: profile.id }));
-      if (att.length) await supabase.from('attendance').upsert(att, { onConflict: 'staff_id,date' });
-    }
-    toast(`Leave ${status.toLowerCase()}`); logActivity(profile, `Leave ${status.toLowerCase()}`, `${map[r.staff_id]?.full_name || ''} ${r.from_date} → ${r.to_date}`); load();
-  }
-
-  const shown = rows.filter(r => tab === 'mine' || statusF === 'all' || r.status === statusF);
-  const days = (r) => dateRange(r.from_date, r.to_date).length;
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <button onClick={() => setTab('mine')} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: tab === 'mine' ? '#2563eb' : '#fff', color: tab === 'mine' ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>My Leave</button>
-        {reviewer && <button onClick={() => setTab('review')} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: tab === 'review' ? '#2563eb' : '#fff', color: tab === 'review' ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>Review Requests</button>}
-        <div style={{ marginLeft: 'auto' }}>
-          {tab === 'review' && <select value={statusF} onChange={e => setStatusF(e.target.value)} style={S.input}><option value="Pending">Pending</option><option value="Approved">Approved</option><option value="Rejected">Rejected</option><option value="all">All</option></select>}
-          {tab === 'mine' && <button onClick={() => setForm({ leave_type: 'Casual', from_date: todayStr(), to_date: todayStr(), reason: '' })} style={S.btn('#2563eb')}><Plus size={16} /> Apply for Leave</button>}
-        </div>
-      </div>
-
-      {form && (
-        <Modal title="Apply for Leave" onClose={() => setForm(null)}>
-          <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <select value={form.leave_type} onChange={e => setForm({ ...form, leave_type: e.target.value })} style={S.input}>
-              {['Casual', 'Sick', 'Earned', 'Duty', 'Other'].map(t => <option key={t}>{t}</option>)}
-            </select>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <label style={{ flex: 1, fontSize: 13 }}>From<input type="date" required value={form.from_date} onChange={e => setForm({ ...form, from_date: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
-              <label style={{ flex: 1, fontSize: 13 }}>To<input type="date" required value={form.to_date} min={form.from_date} onChange={e => setForm({ ...form, to_date: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
-            </div>
-            <textarea required placeholder="Reason" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} style={{ ...S.input, minHeight: 80 }} />
-            <button type="submit" style={S.btn('#2563eb', { justifyContent: 'center' })}>Submit request</button>
-          </form>
-        </Modal>
-      )}
-
-      <div style={S.card}>
-        {shown.length === 0 ? <Empty text="No leave requests." /> : (
-          <Table heads={[...(tab === 'review' ? ['Staff'] : []), 'Type', 'Dates', 'Days', 'Reason', 'Status', 'Action']} min={760}>
-            {shown.map(r => (
-              <tr key={r.id} style={S.row}>
-                {tab === 'review' && <td style={{ ...S.td, fontWeight: 500 }}>{map[r.staff_id]?.full_name || '-'}</td>}
-                <td style={S.td}>{r.leave_type}</td>
-                <td style={S.td}>{fmtDate(r.from_date)} – {fmtDate(r.to_date)}</td>
-                <td style={S.td}>{days(r)}</td>
-                <td style={{ ...S.td, maxWidth: 220 }}>{r.reason}</td>
-                <td style={S.td}><Badge text={r.status} />{r.reviewer_remarks && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>{r.reviewer_remarks}</div>}</td>
-                <td style={S.td}>
-                  {tab === 'mine' && r.status === 'Pending' && <button onClick={() => cancel(r)} style={S.sm('#ef4444')}>Cancel</button>}
-                  {tab === 'review' && r.status === 'Pending' && r.staff_id !== profile.id && (
-                    <div style={{ display: 'flex', gap: 5 }}>
-                      <button onClick={() => decide(r, 'Approved')} style={S.sm('#16a34a')}>Approve</button>
-                      <button onClick={() => decide(r, 'Rejected')} style={S.sm('#ef4444')}>Reject</button>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </Table>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 8. DUTIES & TASKS
-// ==========================================
-function DutyAndTasksPage({ userRole, profile }) {
-  const [tab, setTab] = useState('duty');
-  const { list: staffList } = useStaff();
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={{ display: 'flex', gap: 10, borderBottom: '1px solid #e2e8f0', paddingBottom: 10 }}>
-        {[['duty', 'Duties & Monitoring'], ['task', 'Special Tasks']].map(([id, label]) => (
-          <button key={id} onClick={() => setTab(id)} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: tab === id ? '#2563eb' : '#fff', color: tab === id ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>{label}</button>
-        ))}
-      </div>
-      <WorkTable key={tab} kind={tab} userRole={userRole} profile={profile} staffList={staffList} />
-    </div>
-  );
-}
-
 function WorkTable({ kind, userRole, profile, staffList }) {
-  const table = kind === 'duty' ? 'duty_records' : 'special_tasks';
-  const label = kind === 'duty' ? 'Duty' : 'Task';
+  const K = KINDS[kind];
+  const isTeacher = userRole === 'teacher';
   const canManage = userRole === 'admin' || userRole === 'coordinator';
   const { toast, confirm, ask } = useUI();
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [q, setQ] = useState(''); const [st, setSt] = useState('all'); const [sf, setSf] = useState('all');
-  const [form, setForm] = useState(null);
+  const [q, setQ] = useState(''); const [st, setSt] = useState('all'); const [sf, setSf] = useState('all'); const [mon, setMon] = useState('');
+  const [assign, setAssign] = useState(false); const [cce, setCce] = useState(false); const [edit, setEdit] = useState(null);
+  const [mySubjects, setMySubjects] = useState([]);
   const today = todayStr();
 
   const load = async () => {
-    let query = supabase.from(table).select('*, profiles(full_name)').order('created_at', { ascending: false });
-    if (userRole === 'teacher') query = query.eq('staff_id', profile.id);
+    let query = supabase.from('work_items').select('*, profiles(full_name)').eq('cycle', CYCLE).eq('kind', kind).order('due_date', { ascending: false }).order('created_at', { ascending: false });
+    if (isTeacher) query = query.eq('staff_id', profile.id);
     const { data, error } = await query;
     if (error) toast(error.message, 'error');
     setRows(data || []); setLoading(false);
   };
   useEffect(() => { load(); }, []);
-
-  async function save(e) {
-    e.preventDefault();
-    const dom = domains.find(d => d.code === form.domain_code);
-    const marks = Number(form.marks);
-    if (marks < 0 || marks > dom.weight) return toast(`Marks must be between 0 and ${dom.weight} for ${dom.code}.`, 'error');
-    const payload = { title: form.title.trim(), staff_id: form.staff_id, domain_code: form.domain_code, marks };
-    if (form.end_date) payload.end_date = form.end_date;
-    if (form.description) payload.description = form.description;
-    const res = form.id ? await supabase.from(table).update(payload).eq('id', form.id) : await supabase.from(table).insert({ ...payload, status: 'Pending' });
-    if (res.error) return toast(res.error.message, 'error');
-    toast(`${label} ${form.id ? 'updated' : 'assigned'}`); logActivity(profile, `${form.id ? 'Edited' : 'Assigned'} ${label.toLowerCase()}`, form.title);
-    setForm(null); load();
-  }
+  useEffect(() => {
+    if (kind === 'cce') supabase.from('staff_subjects').select('name').eq('staff_id', profile.id).then(({ data }) => setMySubjects((data || []).map(x => x.name)));
+  }, []);
 
   async function setStatus(r, status, extra = {}) {
-    const { error } = await supabase.from(table).update({ status, ...extra }).eq('id', r.id);
+    const { error } = await supabase.from('work_items').update({ status, ...extra }).eq('id', r.id);
     if (error) return toast(error.message, 'error');
-    logActivity(profile, `${label} ${status}`, r.title); load();
+    load();
+  }
+  async function submit(r) {
+    const note = await ask('Note or evidence link (optional)');
+    if (note === null) return;
+    setStatus(r, 'Submitted', { submission_note: note.trim() || null });
+  }
+  async function approve(r) {
+    const v = await ask(`Points awarded (maximum ${r.marks})`, String(r.awarded ?? r.marks));
+    if (v === null) return;
+    const pts = Number(v);
+    if (v.trim() === '' || !(pts >= 0 && pts <= Number(r.marks))) return toast(`Enter a number between 0 and ${r.marks}.`, 'error');
+    setStatus(r, 'Completed', { awarded: pts, review_remarks: null });
   }
   async function returnBack(r) {
     const remarks = await ask('Remarks for returning this to the staff member');
-    if (!remarks) return;
-    setStatus(r, 'Pending', { review_remarks: remarks });
+    if (!remarks || !remarks.trim()) return;
+    setStatus(r, 'Pending', { review_remarks: remarks.trim() });
   }
   async function remove(r) {
     if (!(await confirm(`Delete "${r.title}"?`))) return;
-    const { error } = await supabase.from(table).delete().eq('id', r.id);
+    const { error } = await supabase.from('work_items').delete().eq('id', r.id);
     if (error) return toast(error.message, 'error');
-    logActivity(profile, `Deleted ${label.toLowerCase()}`, r.title); load();
+    load();
+  }
+  async function saveEdit(e) {
+    e.preventDefault();
+    const marks = Number(edit.marks);
+    if (!(marks > 0)) return toast('Points must be greater than 0.', 'error');
+    const { error } = await supabase.from('work_items').update({ title: edit.title.trim(), description: edit.description || null, sub_code: edit.sub_code, domain_code: SUB[edit.sub_code].domain, marks, due_date: edit.due_date || null }).eq('id', edit.id);
+    if (error) return toast(error.message, 'error');
+    toast('Updated'); setEdit(null); load();
   }
 
-  const isOverdue = (r) => r.status !== 'Completed' && r.end_date && r.end_date < today;
-  const shown = rows.filter(r => (st === 'all' || r.status === st) && (sf === 'all' || r.staff_id === sf) && `${r.title} ${r.profiles?.full_name || ''}`.toLowerCase().includes(q.toLowerCase()));
+  const isOverdue = (r) => r.status !== 'Completed' && r.due_date && r.due_date < today;
+  const shown = rows.filter(r => (st === 'all' || (st === 'Overdue' ? isOverdue(r) : r.status === st)) && (sf === 'all' || r.staff_id === sf) && (!mon || r.month === mon)
+    && `${r.title} ${r.subject_name || ''} ${r.profiles?.full_name || ''}`.toLowerCase().includes(q.toLowerCase()));
+  const cnt = (f) => rows.filter(f).length;
 
   return (
     <div style={S.card}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <h3 style={{ margin: 0 }}>{label === 'Duty' ? 'Duty Records' : 'Special Tasks'} ({shown.length})</h3>
-        {canManage && <button onClick={() => setForm({ title: '', staff_id: '', end_date: '', domain_code: kind === 'duty' ? 'D3' : 'D7', marks: 5, description: '' })} style={S.btn('#2563eb')}><Plus size={16} /> {kind === 'duty' ? 'Assign Duty' : 'Create Task'}</button>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+        <h3 style={{ margin: 0 }}>{K.label} ({shown.length})</h3>
+        {canManage && (kind === 'cce'
+          ? <button onClick={() => setCce(true)} style={S.btn('#2563eb')}><Plus size={16} /> Generate CCE for a Month</button>
+          : <button onClick={() => setAssign(true)} style={S.btn('#2563eb')}><Plus size={16} /> {kind === 'duty' ? 'Assign Weekly Duty' : 'Assign Task'}</button>)}
+      </div>
+
+      {kind === 'cce' && (mySubjects.length > 0 || isTeacher) && (
+        <div style={{ fontSize: 13, color: '#475569', marginBottom: 12 }}>
+          My subjects: {mySubjects.length ? mySubjects.map(m => <span key={m} style={{ background: '#e0e7ff', color: '#3730a3', borderRadius: 12, padding: '2px 10px', marginRight: 6, fontWeight: 600 }}>{m}</span>) : <i>none assigned yet — ask the coordinator.</i>}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        {['Pending', 'Submitted', 'Completed'].map(s => <div key={s} style={{ padding: '6px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}><Badge text={s} /> <b style={{ marginLeft: 6 }}>{cnt(x => x.status === s)}</b></div>)}
+        <div style={{ padding: '6px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}><Badge text="Overdue" /> <b style={{ marginLeft: 6 }}>{cnt(isOverdue)}</b></div>
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-        <SearchBox value={q} onChange={setQ} placeholder="Search title or staff..." />
-        <select value={st} onChange={e => setSt(e.target.value)} style={S.input}><option value="all">All status</option><option>Pending</option><option>Submitted</option><option>Completed</option></select>
-        {canManage && <select value={sf} onChange={e => setSf(e.target.value)} style={S.input}><option value="all">All staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>}
+        <SearchBox value={q} onChange={setQ} placeholder="Search title, subject or staff..." />
+        <select value={st} onChange={e => setSt(e.target.value)} style={S.input}><option value="all">All status</option><option>Pending</option><option>Submitted</option><option>Completed</option><option>Overdue</option></select>
+        {kind === 'cce' && <input type="month" value={mon} onChange={e => setMon(e.target.value)} style={S.input} title="Filter by month" />}
+        {!isTeacher && <select value={sf} onChange={e => setSf(e.target.value)} style={S.input}><option value="all">All staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>}
       </div>
 
-      {form && (
-        <Modal title={`${form.id ? 'Edit' : 'New'} ${label}`} onClose={() => setForm(null)}>
-          <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <input placeholder={`${label} title`} required value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} style={S.input} />
-            <textarea placeholder="Description (optional)" value={form.description || ''} onChange={e => setForm({ ...form, description: e.target.value })} style={{ ...S.input, minHeight: 60 }} />
-            <select value={form.staff_id} onChange={e => setForm({ ...form, staff_id: e.target.value })} required style={S.input}>
-              <option value="">Select Staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-            </select>
+      {cce && <CceModal staffList={staffList} profile={profile} onClose={() => setCce(false)} onDone={() => { setCce(false); load(); }} />}
+      {assign && <AssignModal kind={kind} staffList={staffList} profile={profile} onClose={() => setAssign(false)} onDone={() => { setAssign(false); load(); }} />}
+      {edit && (
+        <Modal title={`Edit ${K.one}`} onClose={() => setEdit(null)}>
+          <form onSubmit={saveEdit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <input required value={edit.title} onChange={e => setEdit({ ...edit, title: e.target.value })} style={S.input} />
+            <textarea placeholder="Description (optional)" value={edit.description || ''} onChange={e => setEdit({ ...edit, description: e.target.value })} style={{ ...S.input, minHeight: 60 }} />
+            <SubSelect value={edit.sub_code} onChange={v => setEdit({ ...edit, sub_code: v })} />
             <div style={{ display: 'flex', gap: 10 }}>
-              <select value={form.domain_code} onChange={e => setForm({ ...form, domain_code: e.target.value })} style={{ ...S.input, flex: 1 }}>{domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}</select>
-              <input type="number" step="0.5" min="0" placeholder="Marks" value={form.marks} onChange={e => setForm({ ...form, marks: e.target.value })} required style={{ ...S.input, width: 90 }} />
+              <label style={{ flex: 1, fontSize: 13 }}>Points<input type="number" step="0.5" min="0.5" value={edit.marks} onChange={e => setEdit({ ...edit, marks: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
+              <label style={{ flex: 1, fontSize: 13 }}>Due date<input type="date" value={edit.due_date || ''} onChange={e => setEdit({ ...edit, due_date: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
             </div>
-            <label style={{ fontSize: 13 }}>Due date (optional)<input type="date" value={form.end_date || ''} onChange={e => setForm({ ...form, end_date: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
             <button type="submit" style={S.btn('#16a34a', { justifyContent: 'center' })}>Save</button>
           </form>
         </Modal>
       )}
 
-      {loading ? <Empty text="Loading..." /> : shown.length === 0 ? <Empty text={`No ${label.toLowerCase()}s found.`} /> : (
-        <Table heads={['Staff', 'Title', 'Domain', 'Due', 'Status', 'Action']} min={820}>
-          {shown.map(r => (
-            <tr key={r.id} style={S.row}>
-              <td style={S.td}>{r.profiles?.full_name}</td>
-              <td style={S.td}>{r.title}{r.description && <div style={{ fontSize: 12, color: '#64748b' }}>{r.description}</div>}{r.review_remarks && r.status === 'Pending' && <div style={{ fontSize: 11, color: '#ef4444' }}>Returned: {r.review_remarks}</div>}</td>
-              <td style={S.td}>{r.domain_code} (+{r.marks})</td>
-              <td style={S.td}>{r.end_date ? fmtDate(r.end_date) : '-'}{isOverdue(r) && <div><Badge text="Overdue" /></div>}</td>
-              <td style={S.td}><Badge text={r.status} /></td>
-              <td style={S.td}>
-                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                  {r.status === 'Pending' && !canManage && r.staff_id === profile.id && <button onClick={() => setStatus(r, 'Submitted')} style={S.sm('#2563eb')}>Submit as Done</button>}
-                  {canManage && r.status === 'Pending' && <button onClick={() => setStatus(r, 'Completed')} style={S.sm('#2563eb')}>Mark Done</button>}
-                  {canManage && r.status === 'Submitted' && <>
-                    <button onClick={() => setStatus(r, 'Completed', { review_remarks: null })} style={S.sm('#16a34a')}>Approve</button>
-                    <button onClick={() => returnBack(r)} style={S.sm('#ef4444')}>Return</button>
-                  </>}
-                  {canManage && <button title="Edit" onClick={() => setForm({ ...r, end_date: r.end_date || '' })} style={S.icon()}><Edit size={14} /></button>}
-                  {canManage && <button title="Delete" onClick={() => remove(r)} style={S.icon('#ef4444')}><Trash2 size={14} /></button>}
-                </div>
-              </td>
-            </tr>
-          ))}
+      {loading ? <Empty text="Loading..." /> : shown.length === 0 ? <Empty text={`No ${K.label.toLowerCase()} found.`} /> : (
+        <Table heads={[...(!isTeacher ? ['Staff'] : []), 'Work', 'Sub-domain', 'Due', 'Points', 'Status', 'Action']} min={900}>
+          {shown.map(r => {
+            const mine = r.staff_id === profile.id;
+            const canSubmit = mine && r.status === 'Pending';
+            const canReview = canManage && (!mine || userRole === 'admin');
+            return (
+              <tr key={r.id} style={S.row}>
+                {!isTeacher && <td style={S.td}>{r.profiles?.full_name}</td>}
+                <td style={S.td}>
+                  {r.title}
+                  {r.description && <div style={{ fontSize: 12, color: '#64748b' }}>{r.description}</div>}
+                  {r.submission_note && <div style={{ fontSize: 12, color: '#3730a3' }}>Note: {r.submission_note}</div>}
+                  {r.review_remarks && r.status === 'Pending' && <div style={{ fontSize: 11, color: '#ef4444' }}>Returned: {r.review_remarks}</div>}
+                </td>
+                <td style={S.td}><span style={{ background: SUB[r.sub_code]?.color || '#64748b', color: '#fff', borderRadius: 10, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>{r.sub_code}</span></td>
+                <td style={S.td}>{r.due_date ? fmtDate(r.due_date) : '-'}{isOverdue(r) && <div><Badge text="Overdue" /></div>}</td>
+                <td style={S.td}>{r.status === 'Completed' ? `${Number(r.awarded ?? r.marks)} / ${r.marks}` : r.marks}</td>
+                <td style={S.td}><Badge text={r.status} /></td>
+                <td style={S.td}>
+                  <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                    {canSubmit && <button onClick={() => submit(r)} style={S.sm('#2563eb')}>Submit as Done</button>}
+                    {canReview && r.status === 'Pending' && !canSubmit && <button onClick={() => approve(r)} style={S.sm('#2563eb')}>Mark Done</button>}
+                    {canReview && r.status === 'Submitted' && <>
+                      <button onClick={() => approve(r)} style={S.sm('#16a34a')}>Approve</button>
+                      <button onClick={() => returnBack(r)} style={S.sm('#ef4444')}>Return</button>
+                    </>}
+                    {canManage && <button title="Edit" onClick={() => setEdit({ ...r })} style={S.icon()}><Edit size={14} /></button>}
+                    {canManage && <button title="Delete" onClick={() => remove(r)} style={S.icon('#ef4444')}><Trash2 size={14} /></button>}
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
         </Table>
       )}
     </div>
   );
 }
 
-// ==========================================
-// 9. EVIDENCE PORTFOLIO
-// ==========================================
-function EvidencePortfolioPage({ userRole, profile }) {
-  const { toast, confirm, ask } = useUI();
-  const { list: staffList } = useStaff();
-  const [evidence, setEvidence] = useState([]);
-  const [file, setFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [form, setForm] = useState({ title: '', domain_code: 'D1' });
-  const [q, setQ] = useState(''); const [st, setSt] = useState('all'); const [dom, setDom] = useState('all'); const [sf, setSf] = useState('all');
-  const fileRef = useRef(null);
-  const isReviewer = userRole === 'admin' || userRole === 'coordinator' || userRole === 'appraisal_authority';
+// ---- Monthly CCE generation: one CCE per staff per subject ----
+function CceModal({ staffList, profile, onClose, onDone }) {
+  const { toast } = useUI();
+  const [month, setMonth] = useState(todayStr().slice(0, 7));
+  const [due, setDue] = useState(lastDayOf(todayStr().slice(0, 7)));
+  const [marks, setMarks] = useState(1);
+  const [sub, setSub] = useState('T5');
+  const [plan, setPlan] = useState(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => { fetchEvidence(); }, []);
+  useEffect(() => {
+    (async () => {
+      setPlan(null);
+      const [{ data: subs }, { data: ex }] = await Promise.all([
+        supabase.from('staff_subjects').select('staff_id, name'),
+        supabase.from('work_items').select('staff_id, subject_name').eq('kind', 'cce').eq('month', month)
+      ]);
+      const active = new Set(staffList.map(s => s.id));
+      const have = new Set((ex || []).map(x => `${x.staff_id}|${x.subject_name}`));
+      const all = (subs || []).filter(s => active.has(s.staff_id));
+      const withSubjects = new Set(all.map(s => s.staff_id));
+      setPlan({ todo: all.filter(s => !have.has(`${s.staff_id}|${s.name}`)), total: all.length, noSubjects: staffList.filter(s => !withSubjects.has(s.id)).length });
+    })();
+  }, [month, staffList]);
 
-  async function fetchEvidence() {
-    let query = supabase.from('evidence_files').select('*, profiles(full_name)').order('created_at', { ascending: false });
-    if (!isReviewer) query = query.eq('staff_id', profile.id);
-    const { data, error } = await query;
-    if (error) toast(error.message, 'error');
-    setEvidence(data || []);
+  async function generate() {
+    if (!plan?.todo.length) return toast('Nothing new to generate.', 'error');
+    const m = Number(marks);
+    if (!(m > 0)) return toast('Points must be greater than 0.', 'error');
+    const rows = plan.todo.map(s => ({ cycle: CYCLE, kind: 'cce', staff_id: s.staff_id, subject_name: s.name, month, title: `CCE – ${s.name} – ${monthLabel(month)}`, domain_code: SUB[sub].domain, sub_code: sub, marks: m, due_date: due || null, status: 'Pending', created_by: profile.id }));
+    setBusy(true);
+    for (let i = 0; i < rows.length; i += 200) {
+      const { error } = await supabase.from('work_items').insert(rows.slice(i, i + 200));
+      if (error) { setBusy(false); return toast(error.message, 'error'); }
+    }
+    setBusy(false);
+    toast(`${rows.length} CCE work(s) generated for ${monthLabel(month)}`); onDone();
   }
-
-  async function handleUpload(e) {
-    e.preventDefault();
-    if (!file || !form.title) return toast('Fill all fields', 'error');
-    if (file.size > 10 * 1024 * 1024) return toast('File is larger than 10 MB.', 'error');
-    setUploading(true);
-    const filePath = `${profile.id}/${Date.now()}_${file.name.replace(/[^\w.\-]/g, '_')}`;
-    const { error: upErr } = await supabase.storage.from('evidence').upload(filePath, file);
-    if (upErr) { toast(upErr.message, 'error'); setUploading(false); return; }
-    const { data: urlData } = supabase.storage.from('evidence').getPublicUrl(filePath);
-    const { error: dbErr } = await supabase.from('evidence_files').insert({ staff_id: profile.id, domain_code: form.domain_code, title: form.title.trim(), file_url: urlData.publicUrl, status: 'Pending' });
-    setUploading(false);
-    if (dbErr) return toast(dbErr.message, 'error');
-    toast('✅ Evidence uploaded! Waiting for review.'); logActivity(profile, 'Uploaded evidence', form.title);
-    setForm({ title: '', domain_code: 'D1' }); setFile(null); if (fileRef.current) fileRef.current.value = ''; fetchEvidence();
-  }
-
-  async function handleReview(ev, newStatus) {
-    const remarks = await ask(newStatus === 'Rejected' ? 'Reason for rejection (required)' : 'Remarks (optional)');
-    if (remarks === null) return;
-    if (newStatus === 'Rejected' && !remarks.trim()) return toast('Please give a reason.', 'error');
-    const { error } = await supabase.from('evidence_files').update({ status: newStatus, reviewer_remarks: remarks.trim() || null }).eq('id', ev.id);
-    if (error) return toast(error.message, 'error');
-    logActivity(profile, `Evidence ${newStatus}`, `${ev.profiles?.full_name}: ${ev.title}`); fetchEvidence();
-  }
-
-  async function handleDelete(ev) {
-    if (!(await confirm(`Delete "${ev.title}"?`))) return;
-    const path = ev.file_url?.split('/evidence/')[1];
-    if (path) await supabase.storage.from('evidence').remove([decodeURIComponent(path)]);
-    const { error } = await supabase.from('evidence_files').delete().eq('id', ev.id);
-    if (error) return toast(error.message, 'error');
-    logActivity(profile, 'Deleted evidence', ev.title); fetchEvidence();
-  }
-
-  const shown = evidence.filter(ev => (st === 'all' || ev.status === st) && (dom === 'all' || ev.domain_code === dom) && (sf === 'all' || ev.staff_id === sf) && `${ev.title} ${ev.profiles?.full_name || ''}`.toLowerCase().includes(q.toLowerCase()));
-  const cnt = (s) => evidence.filter(e => e.status === s).length;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={S.card}>
-        <h3 style={{ marginTop: 0 }}>Upload New Evidence</h3>
-        <form onSubmit={handleUpload} style={{ display: 'flex', gap: 15, alignItems: 'center', flexWrap: 'wrap', marginTop: 15 }}>
-          <input placeholder="Evidence Title (e.g., Lesson Plan)" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} required style={{ ...S.input, flex: '1 1 200px' }} />
-          <select value={form.domain_code} onChange={e => setForm({ ...form, domain_code: e.target.value })} style={S.input}>{domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}</select>
-          <input type="file" ref={fileRef} onChange={e => setFile(e.target.files[0])} required style={{ ...S.input, padding: 8 }} />
-          <button type="submit" disabled={uploading} style={S.btn('#2563eb', { padding: '10px 20px' })}>{uploading ? 'Uploading...' : 'Upload'}</button>
-        </form>
-        <div style={{ fontSize: 12, color: '#64748b', marginTop: 8 }}>Each verified item adds 2 marks to its domain (capped at the domain weight). Max file size 10 MB.</div>
-      </div>
-
-      <div style={S.card}>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
-          {['Pending', 'Verified', 'Rejected'].map(s => <div key={s} style={{ padding: '6px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}><Badge text={s} /> <b style={{ marginLeft: 6 }}>{cnt(s)}</b></div>)}
+    <Modal title="Generate monthly CCE works" onClose={onClose}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <label style={{ flex: 1, fontSize: 13 }}>Month<input type="month" value={month} onChange={e => { setMonth(e.target.value); setDue(lastDayOf(e.target.value)); }} style={{ ...S.input, width: '100%' }} /></label>
+          <label style={{ flex: 1, fontSize: 13 }}>Due date<input type="date" value={due} onChange={e => setDue(e.target.value)} style={{ ...S.input, width: '100%' }} /></label>
         </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-          <SearchBox value={q} onChange={setQ} placeholder="Search title or staff..." />
-          <select value={st} onChange={e => setSt(e.target.value)} style={S.input}><option value="all">All status</option><option>Pending</option><option>Verified</option><option>Rejected</option></select>
-          <select value={dom} onChange={e => setDom(e.target.value)} style={S.input}><option value="all">All domains</option>{domains.map(d => <option key={d.code}>{d.code}</option>)}</select>
-          {isReviewer && <select value={sf} onChange={e => setSf(e.target.value)} style={S.input}><option value="all">All staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>}
+        <label style={{ fontSize: 13 }}>Counts towards sub-domain<SubSelect value={sub} onChange={setSub} style={{ ...S.input, width: '100%' }} /></label>
+        <label style={{ fontSize: 13 }}>Points per CCE work<input type="number" min="0.5" step="0.5" value={marks} onChange={e => setMarks(e.target.value)} style={{ ...S.input, width: '100%' }} /></label>
+        <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: 12, fontSize: 13, color: '#334155' }}>
+          {!plan ? 'Checking...' : <>
+            <div>Subjects found: <b>{plan.total}</b> • Already generated: <b>{plan.total - plan.todo.length}</b> • <b style={{ color: '#2563eb' }}>To create: {plan.todo.length}</b></div>
+            {plan.noSubjects > 0 && <div style={{ color: '#92400e', marginTop: 4 }}>{plan.noSubjects} active staff have no subjects yet (Subjects tab) and will get no CCE.</div>}
+          </>}
+        </div>
+        <button onClick={generate} disabled={busy || !plan || plan.todo.length === 0} style={S.btn('#2563eb', { justifyContent: 'center' })}>{busy ? 'Generating...' : 'Generate for all staff'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ---- Bulk assignment (weekly duties and special tasks) ----
+function AssignModal({ kind, staffList, profile, onClose, onDone }) {
+  const { toast } = useUI();
+  const K = KINDS[kind];
+  const [f, setF] = useState({ title: '', description: '', sub_code: K.def, marks: 1, due_date: '', start: todayStr(), weeks: 1 });
+  const [sel, setSel] = useState({});
+  const [q, setQ] = useState(''); const [dept, setDept] = useState('all');
+  const [busy, setBusy] = useState(false);
+
+  const depts = [...new Set(staffList.map(s => s.department).filter(Boolean))].sort();
+  const list = staffList.filter(s => (dept === 'all' || s.department === dept) && s.full_name.toLowerCase().includes(q.toLowerCase()));
+  const ids = Object.keys(sel).filter(k => sel[k]);
+  const allOn = list.length > 0 && list.every(s => sel[s.id]);
+  const toggleAll = () => setSel(p => { const n = { ...p }; list.forEach(s => { n[s.id] = !allOn; }); return n; });
+
+  async function save(e) {
+    e.preventDefault();
+    if (!ids.length) return toast('Select at least one staff member.', 'error');
+    const marks = Number(f.marks);
+    if (!(marks > 0)) return toast('Points must be greater than 0.', 'error');
+    const weeks = kind === 'duty' ? Math.max(1, Math.min(12, Number(f.weeks) || 1)) : 1;
+    const rows = [];
+    ids.forEach(id => {
+      for (let w = 0; w < weeks; w++) {
+        const ws = addDays(f.start, 7 * w);
+        rows.push({ cycle: CYCLE, kind, staff_id: id, title: kind === 'duty' ? `${f.title.trim()} (week of ${fmtDate(ws)})` : f.title.trim(), description: f.description || null, domain_code: SUB[f.sub_code].domain, sub_code: f.sub_code, marks, due_date: kind === 'duty' ? addDays(ws, 6) : (f.due_date || null), status: 'Pending', created_by: profile.id });
+      }
+    });
+    setBusy(true);
+    const { error } = await supabase.from('work_items').insert(rows);
+    setBusy(false);
+    if (error) return toast(error.message, 'error');
+    toast(`${rows.length} ${K.one.toLowerCase()}(s) assigned to ${ids.length} staff`); onDone();
+  }
+
+  return (
+    <Modal title={kind === 'duty' ? 'Assign Weekly Duty (bulk)' : 'Assign Special Task (bulk)'} onClose={onClose} width={620}>
+      <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <input required placeholder={kind === 'duty' ? 'Duty title (e.g. Hostel supervision)' : 'Task title'} value={f.title} onChange={e => setF({ ...f, title: e.target.value })} style={S.input} />
+        <textarea placeholder="Description (optional)" value={f.description} onChange={e => setF({ ...f, description: e.target.value })} style={{ ...S.input, minHeight: 50 }} />
+        <label style={{ fontSize: 13 }}>Counts towards sub-domain<SubSelect value={f.sub_code} onChange={v => setF({ ...f, sub_code: v })} style={{ ...S.input, width: '100%' }} /></label>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <label style={{ flex: '1 1 100px', fontSize: 13 }}>Points<input type="number" min="0.5" step="0.5" value={f.marks} onChange={e => setF({ ...f, marks: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
+          {kind === 'duty' ? <>
+            <label style={{ flex: '1 1 140px', fontSize: 13 }}>First week starts<input type="date" value={f.start} onChange={e => setF({ ...f, start: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
+            <label style={{ flex: '1 1 100px', fontSize: 13 }}>Repeat (weeks)<input type="number" min="1" max="12" value={f.weeks} onChange={e => setF({ ...f, weeks: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
+          </> : (
+            <label style={{ flex: '1 1 140px', fontSize: 13 }}>Due date<input type="date" value={f.due_date} onChange={e => setF({ ...f, due_date: e.target.value })} style={{ ...S.input, width: '100%' }} /></label>
+          )}
         </div>
 
-        {shown.length === 0 ? <Empty text="No evidence found." /> : (
-          <Table heads={['Staff', 'Title', 'Domain', 'Uploaded', 'Status', 'Action']} min={780}>
-            {shown.map(ev => {
-              const mine = ev.staff_id === profile.id;
-              const canReview = isReviewer && (!mine || userRole === 'admin');
-              const canDelete = userRole === 'admin' || (mine && ev.status !== 'Verified');
-              return (
-                <tr key={ev.id} style={S.row}>
-                  <td style={S.td}>{ev.profiles?.full_name}</td>
-                  <td style={S.td}><a href={ev.file_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{ev.title}</a></td>
-                  <td style={S.td}>{ev.domain_code}</td>
-                  <td style={S.td}>{fmtDate(ev.created_at)}</td>
-                  <td style={S.td}><Badge text={ev.status} />{ev.reviewer_remarks && <div style={{ fontSize: 11, color: ev.status === 'Rejected' ? '#ef4444' : '#64748b', marginTop: 4 }}>Remarks: {ev.reviewer_remarks}</div>}</td>
-                  <td style={S.td}>
-                    <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                      {canReview && ev.status === 'Pending' && <>
-                        <button onClick={() => handleReview(ev, 'Verified')} style={S.sm('#16a34a')}>Verify</button>
-                        <button onClick={() => handleReview(ev, 'Rejected')} style={S.sm('#ef4444')}>Reject</button>
-                      </>}
-                      {canDelete && <button title="Delete" onClick={() => handleDelete(ev)} style={S.icon('#ef4444')}><Trash2 size={14} /></button>}
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </Table>
-        )}
-      </div>
-    </div>
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 10 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+            <SearchBox value={q} onChange={setQ} placeholder="Search staff..." />
+            <select value={dept} onChange={e => setDept(e.target.value)} style={S.input}><option value="all">All departments</option>{depts.map(x => <option key={x}>{x}</option>)}</select>
+          </div>
+          <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginBottom: 6 }}><input type="checkbox" checked={allOn} onChange={toggleAll} /> Select all shown ({list.length}) — selected in total: {ids.length}</label>
+          <div style={{ maxHeight: 200, overflowY: 'auto', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: 4 }}>
+            {list.map(s => <label key={s.id} style={{ fontSize: 13 }}><input type="checkbox" checked={!!sel[s.id]} onChange={e => setSel(p => ({ ...p, [s.id]: e.target.checked }))} /> {s.full_name}</label>)}
+          </div>
+        </div>
+        <button type="submit" disabled={busy} style={S.btn('#16a34a', { justifyContent: 'center' })}>{busy ? 'Assigning...' : `Assign to ${ids.length} staff`}</button>
+      </form>
+    </Modal>
   );
 }
 
 // ==========================================
-// 10. BONUS POINTS
+// BONUS POINTS
 // ==========================================
 function BonusPointsPage({ userRole, profile }) {
   const reviewer = userRole !== 'teacher';
@@ -1506,7 +1347,7 @@ function BonusPointsPage({ userRole, profile }) {
   const { list: staffList, map } = useStaff(false);
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(null);
-  const [mode, setMode] = useState('request'); // request | award
+  const [mode, setMode] = useState('request');
   const [statusF, setStatusF] = useState(reviewer ? 'Pending' : 'all');
 
   const load = async () => {
@@ -1528,10 +1369,8 @@ function BonusPointsPage({ userRole, profile }) {
       : { ...base, staff_id: profile.id, points_requested: pts, points_approved: 0, status: 'Pending' };
     const { error } = await supabase.from('special_point_entries').insert(payload);
     if (error) return toast(error.message, 'error');
-    toast(mode === 'award' ? 'Bonus points awarded' : 'Request submitted');
-    logActivity(profile, mode === 'award' ? 'Awarded bonus' : 'Requested bonus', `${form.title} (${pts})`); setForm(null); load();
+    toast(mode === 'award' ? 'Bonus points awarded' : 'Request submitted'); setForm(null); load();
   }
-
   async function approve(r) {
     const v = await ask(`Points to award (requested: ${r.points_requested || 0})`, String(r.points_requested || ''));
     if (v === null) return;
@@ -1539,7 +1378,7 @@ function BonusPointsPage({ userRole, profile }) {
     if (!(pts >= 0)) return toast('Invalid points.', 'error');
     const { error } = await supabase.from('special_point_entries').update({ status: 'Approved', points_approved: pts }).eq('id', r.id);
     if (error) return toast(error.message, 'error');
-    logActivity(profile, 'Approved bonus', `${map[r.staff_id]?.full_name}: ${pts}`); load();
+    load();
   }
   async function reject(r) {
     const remarks = await ask('Reason for rejection');
@@ -1607,114 +1446,134 @@ function BonusPointsPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 11. APPRAISAL WORKFLOW (Teacher -> Coordinator -> Authority)
+// APPRAISAL WORKFLOW  (Staff -> Coordinator -> Appraisal Authority)
+// Domain-wise, sub-domain-wise form exactly like the policy scorecards.
 // ==========================================
-function AppraisalWorkflowPage({ userRole, profile }) {
-  const { toast, ask, confirm } = useUI();
+function RatingButtons({ value, onChange, disabled, color }) {
+  return (
+    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+      {[1, 2, 3, 4, 5, 0].map(v => {
+        const on = value === v;
+        return <button key={v} type="button" disabled={disabled} title={RATING_LABEL[v]} onClick={() => onChange(v)}
+          style={{ minWidth: v === 0 ? 46 : 34, padding: '6px 8px', borderRadius: 6, border: on ? `2px solid ${color}` : '1px solid #cbd5e1', background: on ? `${color}18` : '#fff', color: on ? color : '#475569', fontWeight: 600, fontSize: 13, cursor: disabled ? 'default' : 'pointer' }}>{v === 0 ? 'N/A' : v}</button>;
+      })}
+    </div>
+  );
+}
+
+function AppraisalPage({ userRole, profile }) {
+  const { toast, confirm } = useUI();
   const { list: staffAll } = useStaff();
   const isTeacher = userRole === 'teacher';
   const [tab, setTab] = useState('form');
-  const [selectedStaff, setSelectedStaff] = useState(isTeacher ? profile?.id : '');
-  const [appraisalData, setAppraisalData] = useState(null);
-  const [ratings, setRatings] = useState({});
-  const [comments, setComments] = useState({});
+  const [selected, setSelected] = useState(isTeacher ? profile.id : '');
+  const [appr, setAppr] = useState(null);
   const [status, setStatus] = useState('Draft');
+  const [selfR, setSelfR] = useState({}); const [selfC, setSelfC] = useState({});
+  const [offR, setOffR] = useState({}); const [offC, setOffC] = useState({});
+  const [items, setItems] = useState([]);
+  const [coordRemarks, setCoordRemarks] = useState(''); const [authRemarks, setAuthRemarks] = useState('');
   const [saving, setSaving] = useState(false);
-  const [coordinatorRemarks, setCoordinatorRemarks] = useState('');
-  const [authorityRemarks, setAuthorityRemarks] = useState('');
-  const [autoMarks, setAutoMarks] = useState({});
   const [overview, setOverview] = useState([]);
+  const [open, setOpen] = useState({ D1: true });
 
   const staffList = isTeacher ? [{ id: profile.id, full_name: profile.full_name }] : staffAll;
-  const isSelf = selectedStaff === profile.id;
-
-  // Who can do what (nobody reviews their own appraisal, except admin)
+  const isSelf = selected === profile.id;
   const canEditOwn = isSelf && ['Draft', 'Returned'].includes(status);
   const canCoord = status === 'Submitted' && ((userRole === 'coordinator' && !isSelf) || userRole === 'admin');
   const canAuth = status === 'Coordinator_Reviewed' && ((userRole === 'appraisal_authority' && !isSelf) || userRole === 'admin');
-  const isReadOnly = !(canEditOwn || canCoord || canAuth);
+  const reviewing = canCoord || canAuth;
+  const readOnly = !(canEditOwn || reviewing);
 
   useEffect(() => {
-    if (!selectedStaff) return;
-    supabase.from('appraisals').select('*, appraisal_ratings(domain_code, rating, comments)').eq('staff_id', selectedStaff).eq('cycle', CYCLE).maybeSingle().then(({ data }) => {
-      if (data) {
-        setAppraisalData(data); setStatus(data.status || 'Draft');
-        setCoordinatorRemarks(data.coordinator_remarks || ''); setAuthorityRemarks(data.authority_remarks || '');
-        const rMap = {}, cMap = {};
-        (data.appraisal_ratings || []).forEach(r => { rMap[r.domain_code] = r.rating; cMap[r.domain_code] = r.comments; });
-        setRatings(rMap); setComments(cMap);
-      } else {
-        setAppraisalData(null); setStatus('Draft'); setRatings({}); setComments({}); setCoordinatorRemarks(''); setAuthorityRemarks('');
-      }
-    });
-  }, [selectedStaff]);
-
-  useEffect(() => {
-    if (!selectedStaff) return;
-    Promise.all([
-      supabase.from('evidence_files').select('domain_code').eq('staff_id', selectedStaff).eq('status', 'Verified'),
-      supabase.from('duty_records').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed'),
-      supabase.from('special_tasks').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed')
-    ]).then(([evRes, dutyRes, taskRes]) => {
-      const m = {};
-      (evRes.data || []).forEach(i => { if (i.domain_code) m[i.domain_code] = (m[i.domain_code] || 0) + 2; });
-      [...(dutyRes.data || []), ...(taskRes.data || [])].forEach(i => { if (i.domain_code && i.marks) m[i.domain_code] = (m[i.domain_code] || 0) + Number(i.marks); });
-      setAutoMarks(m);
-    });
-  }, [selectedStaff, status]);
+    if (!selected) return;
+    (async () => {
+      const [{ data: a }, { data: w }] = await Promise.all([
+        supabase.from('appraisals').select('*, appraisal_sub_ratings(*)').eq('staff_id', selected).eq('cycle', CYCLE).maybeSingle(),
+        supabase.from('work_items').select('*').eq('staff_id', selected).eq('cycle', CYCLE)
+      ]);
+      setItems(w || []);
+      const sR = {}, sC = {}, oR = {}, oC = {};
+      (a?.appraisal_sub_ratings || []).forEach(r => {
+        if (r.self_rating !== null) sR[r.sub_code] = r.self_rating;
+        if (r.rating !== null) oR[r.sub_code] = r.rating;
+        sC[r.sub_code] = r.self_comment || ''; oC[r.sub_code] = r.reviewer_comment || '';
+      });
+      setAppr(a || null); setStatus(a?.status || 'Draft');
+      setSelfR(sR); setSelfC(sC); setOffR(oR); setOffC(oC);
+      setCoordRemarks(a?.coordinator_remarks || ''); setAuthRemarks(a?.authority_remarks || '');
+    })();
+  }, [selected]);
 
   useEffect(() => {
     if (tab !== 'overview') return;
     supabase.from('appraisals').select('staff_id, status, final_score').eq('cycle', CYCLE).then(({ data }) => setOverview(data || []));
   }, [tab]);
 
-  const { per, total: totalScore } = computeScores(ratings, autoMarks);
-  const ratingOf = (code) => ratings[code] === undefined ? 3 : ratings[code];
-  const staffName = staffList.find(s => s.id === selectedStaff)?.full_name || '';
+  // effective rating: official once a reviewer is involved, otherwise the staff member's own rating
+  const useOfficial = reviewing || ['Coordinator_Reviewed', 'Approved'].includes(status);
+  const eff = useMemo(() => {
+    const m = {};
+    SUBS.forEach(s => { const v = useOfficial && offR[s.code] !== undefined ? offR[s.code] : selfR[s.code]; if (v !== undefined) m[s.code] = v; });
+    return m;
+  }, [selfR, offR, useOfficial]);
+  const wm = useMemo(() => workMap(items), [items]);
+  const computed = useMemo(() => computeScores(eff, wm), [eff, wm]);
+  const staffName = staffList.find(s => s.id === selected)?.full_name || '';
+  const shownTotal = status === 'Approved' && appr ? Number(appr.final_score) : computed.total;
 
-  async function saveProgress(newStatus, successMsg = 'Saved successfully') {
-    if (!selectedStaff) return toast('Select staff first', 'error');
+  async function persist(newStatus, msg) {
+    if (!selected) return toast('Select staff first', 'error');
     setSaving(true);
     try {
       const payload = {
-        staff_id: selectedStaff, cycle: CYCLE, final_score: Number(totalScore.toFixed(2)), status: newStatus,
-        coordinator_remarks: canCoord ? coordinatorRemarks : (appraisalData?.coordinator_remarks || null),
-        authority_remarks: canAuth ? authorityRemarks : (appraisalData?.authority_remarks || null)
+        staff_id: selected, cycle: CYCLE, status: newStatus, final_score: Number(computed.total.toFixed(2)),
+        coordinator_remarks: canCoord ? coordRemarks : (appr?.coordinator_remarks || null),
+        authority_remarks: canAuth ? authRemarks : (appr?.authority_remarks || null)
       };
-      const { data: appr, error: apprErr } = await supabase.from('appraisals').upsert(payload, { onConflict: 'staff_id,cycle' }).select().single();
-      if (apprErr) throw apprErr;
-      const rows = domains.map(d => ({ appraisal_id: appr.id, domain_code: d.code, rating: ratingOf(d.code), comments: comments[d.code] || '' }));
-      const { error: rErr } = await supabase.from('appraisal_ratings').upsert(rows, { onConflict: 'appraisal_id,domain_code' });
-      if (rErr) throw rErr;
-      setStatus(newStatus); setAppraisalData(appr);
-      toast('✅ ' + successMsg); logActivity(profile, `Appraisal → ${newStatus.replaceAll('_', ' ')}`, staffName);
+      const { data: a, error } = await supabase.from('appraisals').upsert(payload, { onConflict: 'staff_id,cycle' }).select().single();
+      if (error) throw error;
+      const rows = SUBS.map(s => ({
+        appraisal_id: a.id, domain_code: s.domain, sub_code: s.code,
+        self_rating: selfR[s.code] ?? null,
+        rating: canEditOwn ? null : (reviewing ? (eff[s.code] ?? null) : (offR[s.code] ?? null)),
+        self_comment: selfC[s.code] || '', reviewer_comment: offC[s.code] || ''
+      }));
+      const { error: e2 } = await supabase.from('appraisal_sub_ratings').upsert(rows, { onConflict: 'appraisal_id,sub_code' });
+      if (e2) throw e2;
+      if (canEditOwn) setOffR({});
+      setStatus(newStatus); setAppr(a); toast('✅ ' + msg);
     } catch (err) { toast('Error: ' + err.message, 'error'); } finally { setSaving(false); }
   }
 
   async function submitForReview() {
+    const missing = SUBS.find(s => selfR[s.code] === undefined);
+    if (missing) { setOpen(o => ({ ...o, [missing.domain]: true })); return toast(`Please rate ${missing.code} (choose a rating or N/A) before submitting.`, 'error'); }
+    const naNoReason = SUBS.find(s => selfR[s.code] === 0 && !(selfC[s.code] || '').trim());
+    if (naNoReason) { setOpen(o => ({ ...o, [naNoReason.domain]: true })); return toast(`${naNoReason.code}: N/A needs a short justification in the comment.`, 'error'); }
     if (!(await confirm('Submit to the coordinator? You cannot edit it until it is returned.'))) return;
-    saveProgress('Submitted', 'Submitted to coordinator');
+    persist('Submitted', 'Submitted to coordinator');
   }
-  async function returnWithRemarks(toStatus, who) {
-    const currentRemarks = who === 'coordinator' ? coordinatorRemarks : authorityRemarks;
-    if (!currentRemarks.trim()) return toast('Please write remarks before returning.', 'error');
-    saveProgress(toStatus, 'Returned');
+  function returnWith(toStatus, who) {
+    if (!(who === 'coordinator' ? coordRemarks : authRemarks).trim()) return toast('Please write remarks before returning.', 'error');
+    persist(toStatus, 'Returned');
   }
   async function reopen() {
     if (!(await confirm('Reopen this approved appraisal and return it to the staff member?'))) return;
-    saveProgress('Returned', 'Appraisal reopened');
+    persist('Returned', 'Appraisal reopened');
+  }
+  function printForm() {
+    const all = {}; domains.forEach(d => { all[d.code] = true; });
+    setOpen(all); setTimeout(() => window.print(), 300);
   }
 
   const statusColor = { Draft: ['#f1f5f9', '#475569'], Submitted: ['#e0e7ff', '#3730a3'], Coordinator_Reviewed: ['#fae8ff', '#86198f'], Returned: ['#fee2e2', '#991b1b'], Approved: ['#dcfce7', '#166534'] }[status] || ['#f1f5f9', '#475569'];
   const btnBase = { padding: 16, borderRadius: 8, border: 'none', fontWeight: 'bold', cursor: 'pointer', color: '#fff' };
+  const rtxt = (v) => v === undefined ? '-' : v === 0 ? 'N/A' : v;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {!isTeacher && (
-        <div className="no-print" style={{ display: 'flex', gap: 8 }}>
-          {[['form', 'Appraisal Form'], ['overview', 'All Staff Overview']].map(([id, l]) => <button key={id} onClick={() => setTab(id)} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: tab === id ? '#2563eb' : '#fff', color: tab === id ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>{l}</button>)}
-        </div>
-      )}
+      {!isTeacher && <Tabs tabs={[['form', 'Appraisal Form'], ['overview', 'All Staff Overview']]} value={tab} onChange={setTab} />}
 
       {tab === 'overview' && (
         <div style={S.card}>
@@ -1726,7 +1585,7 @@ function AppraisalWorkflowPage({ userRole, profile }) {
                   <td style={{ ...S.td, fontWeight: 500 }}>{s.full_name}</td>
                   <td style={S.td}>{a ? <Badge text={a.status} /> : <span style={{ color: '#94a3b8' }}>Not started</span>}</td>
                   <td style={S.td}>{a ? Number(a.final_score || 0).toFixed(1) : '-'}</td>
-                  <td style={S.td}><button onClick={() => { setSelectedStaff(s.id); setTab('form'); }} style={S.sm('#2563eb')}>Open</button></td>
+                  <td style={S.td}><button onClick={() => { setSelected(s.id); setTab('form'); }} style={S.sm('#2563eb')}>Open</button></td>
                 </tr>
               );
             })}
@@ -1741,77 +1600,109 @@ function AppraisalWorkflowPage({ userRole, profile }) {
               <h3 style={{ margin: 0 }}>Appraisal Status</h3>
               <span style={{ padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 'bold', background: statusColor[0], color: statusColor[1] }}>{status.replaceAll('_', ' ')}</span>
             </div>
-            <select className="no-print" value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)} disabled={isTeacher} style={{ ...S.input, minWidth: 220 }}>
+            <select className="no-print" value={selected} onChange={e => setSelected(e.target.value)} disabled={isTeacher} style={{ ...S.input, minWidth: 220 }}>
               <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
             </select>
-            {selectedStaff && <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Cycle {CYCLE} • {staffName}</div>}
+            {selected && <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>Cycle {CYCLE} • {staffName}</div>}
           </div>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            {selectedStaff && <button className="no-print" onClick={() => window.print()} style={S.btn('#475569')}><Printer size={16} /> Print</button>}
+            {selected && <button className="no-print" onClick={printForm} style={S.btn('#475569')}><Printer size={16} /> Print</button>}
             <div style={{ textAlign: 'right', background: '#f8fafc', padding: 15, borderRadius: 8, border: '1px solid #e2e8f0' }}>
-              <div style={{ fontSize: 13, color: '#64748b' }}>Official Appraisal Score (Max 100)</div>
-              <div style={{ fontSize: 28, fontWeight: 'bold', color: '#2563eb', marginTop: 5 }}>{totalScore.toFixed(2)}</div>
+              <div style={{ fontSize: 13, color: '#64748b' }}>Official Appraisal Score (Max 100){status === 'Approved' ? ' • locked' : ''}</div>
+              <div style={{ fontSize: 28, fontWeight: 'bold', color: '#2563eb', marginTop: 5 }}>{shownTotal.toFixed(2)}</div>
             </div>
           </div>
         </div>
 
-        {!selectedStaff && <div style={S.card}><Empty text="Select a staff member to open their appraisal." /></div>}
+        {!selected && <div style={S.card}><Empty text="Select a staff member to open their appraisal." /></div>}
 
-        {selectedStaff && (
+        {selected && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
-            <div style={{ fontSize: 13, color: '#64748b' }}>Untouched domains default to 3 (Expected). Choose N/A to exclude a domain — the total is then scaled to 100.</div>
+            <div className="no-print" style={{ ...S.card, background: '#f8fafc', fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
+              <b>How marks are calculated.</b> Each sub-domain gets a <b>rating %</b> (rating ÷ 5) and a <b>work %</b> (points earned ÷ points assigned and due, from CCE works, weekly duties and tasks).
+              If both exist they are averaged ({Math.round(WORK_SHARE * 100)}% work / {Math.round((1 - WORK_SHARE) * 100)}% rating); if only one exists, that one is used.
+              A sub-domain or domain with neither (or rated N/A) is <b>excluded</b> and the total is re-scaled to 100, so staff are never penalised for areas that do not apply to them.
+              {isSelf && canEditOwn && <> Staff: rate every sub-domain (1–5 or N/A with a reason), then submit.</>}
+            </div>
+
             {domains.map(d => {
-              const p = per[d.code];
-              const r = ratingOf(d.code);
+              const pd = computed.per[d.code];
+              const isOpen = !!open[d.code];
               return (
-                <div key={d.code} style={{ ...S.card, background: isReadOnly ? '#f8fafc' : '#fff' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15, flexWrap: 'wrap', gap: 10 }}>
+                <div key={d.code} style={S.card}>
+                  <div onClick={() => setOpen(o => ({ ...o, [d.code]: !o[d.code] }))} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer', flexWrap: 'wrap', gap: 10 }}>
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ background: d.color, color: '#fff', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 'bold' }}>{d.code}</span><b style={{ fontSize: 16 }}>{d.name}</b></div>
-                      <div style={{ fontSize: 13, color: '#64748b', marginTop: 5 }}>Max Weight: {d.weight} Marks</div>
+                      <div style={{ fontSize: 13, color: '#64748b', marginTop: 5 }}>Max Weight: {d.weight} Marks • {d.subs.length} sub-domains {isOpen ? '▲' : '▼'}</div>
                     </div>
-                    <div style={{ textAlign: 'right', minWidth: 170, background: '#f8fafc', padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#64748b', marginBottom: 4 }}><span>Manual:</span> <span>{p.manual.toFixed(1)}</span></div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: p.auto > 0 ? '#16a34a' : '#94a3b8', fontWeight: 'bold', marginBottom: 4, gap: 12 }}><span>Auto (Evidence/Tasks):</span> <span>+{p.na ? 0 : p.auto}</span></div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 'bold', color: d.color, borderTop: '1px solid #cbd5e1', paddingTop: 4 }}><span>Total:</span> <span>{p.na ? 'N/A' : p.total.toFixed(1)}</span></div>
+                    <div style={{ textAlign: 'right', fontWeight: 'bold', fontSize: 18, color: pd.na ? '#94a3b8' : d.color }}>
+                      {pd.na ? 'N/A (excluded)' : `${pd.score.toFixed(1)} / ${d.weight}`}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 15 }}>
-                    {[1, 2, 3, 4, 5].map(val => (
-                      <button key={val} disabled={isReadOnly} onClick={() => setRatings(prev => ({ ...prev, [d.code]: val }))} style={{ flex: '1 1 100px', padding: 10, borderRadius: 8, border: r === val ? `2px solid ${d.color}` : '1px solid #cbd5e1', background: r === val ? `${d.color}15` : '#fff', cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, color: r === val ? d.color : '#475569' }}>
-                        {val} - {val === 5 ? 'Exceptional' : val === 4 ? 'Strong' : val === 3 ? 'Expected' : val === 2 ? 'Developing' : 'Unsatisfactory'}
-                      </button>
-                    ))}
-                    <button disabled={isReadOnly} onClick={() => setRatings(prev => ({ ...prev, [d.code]: null }))} style={{ flex: '0 0 60px', padding: 10, borderRadius: 8, border: r === null ? '2px solid #64748b' : '1px solid #cbd5e1', background: r === null ? '#f1f5f9' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, color: '#475569' }}>N/A</button>
-                  </div>
-                  <textarea readOnly={isReadOnly} placeholder="Comments/Reflections..." value={comments[d.code] || ''} onChange={e => setComments(prev => ({ ...prev, [d.code]: e.target.value }))} style={{ ...S.input, width: '100%', minHeight: 60, background: isReadOnly ? '#f1f5f9' : '#fff' }} />
+
+                  {isOpen && d.subs.map(s => {
+                    const x = computed.subs[s.code]; const w = wm[s.code];
+                    return (
+                      <div key={s.code} style={{ padding: '12px 0', borderTop: '1px solid #f1f5f9', marginTop: 12 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                          <div style={{ flex: '1 1 260px' }}>
+                            <b style={{ color: d.color }}>{s.code}</b> <b>{s.name}</b> <span style={{ color: '#64748b', fontSize: 12 }}>({s.weight} marks)</span>
+                            {w && <div style={{ fontSize: 12, color: '#0d9488', marginTop: 3 }}>Work: {w.earned.toFixed(1)}/{w.assigned.toFixed(1)} pts • {w.done}/{w.n} completed</div>}
+                          </div>
+                          <div style={{ fontSize: 13, textAlign: 'right', minWidth: 90 }}>
+                            <div style={{ color: '#64748b' }}>Score</div>
+                            <b style={{ fontSize: 16 }}>{x.na ? 'N/A' : `${x.score.toFixed(2)}`}</b>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+                          {canEditOwn
+                            ? <RatingButtons value={selfR[s.code]} onChange={v => setSelfR(p => ({ ...p, [s.code]: v }))} color={d.color} />
+                            : reviewing
+                              ? <>
+                                  <span style={{ fontSize: 12, color: '#64748b' }}>Self: <b>{rtxt(selfR[s.code])}</b></span>
+                                  <RatingButtons value={eff[s.code]} onChange={v => setOffR(p => ({ ...p, [s.code]: v }))} color={d.color} />
+                                </>
+                              : <RatingButtons value={eff[s.code]} disabled color={d.color} />}
+                          {eff[s.code] !== undefined && eff[s.code] >= 1 && <span style={{ fontSize: 12, color: '#64748b' }}>{RATING_LABEL[eff[s.code]]}</span>}
+                        </div>
+
+                        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                          {canEditOwn ? (
+                            <input placeholder="Evidence / reflection (required for N/A)" value={selfC[s.code] || ''} onChange={e => setSelfC(p => ({ ...p, [s.code]: e.target.value }))} style={{ ...S.input, width: '100%', padding: 8 }} />
+                          ) : <>
+                            {selfC[s.code] && <div style={{ fontSize: 12, color: '#475569' }}><b>Staff:</b> {selfC[s.code]}</div>}
+                            {reviewing
+                              ? <input placeholder="Reviewer comment" value={offC[s.code] || ''} onChange={e => setOffC(p => ({ ...p, [s.code]: e.target.value }))} style={{ ...S.input, width: '100%', padding: 8 }} />
+                              : offC[s.code] && <div style={{ fontSize: 12, color: '#86198f' }}><b>Reviewer:</b> {offC[s.code]}</div>}
+                          </>}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}
 
-            {appraisalData?.coordinator_remarks && !canCoord && (
-              <div style={{ background: '#fdf4ff', padding: 15, borderRadius: 8, border: '1px solid #fae8ff' }}><strong style={{ color: '#86198f' }}>Coordinator Remarks:</strong> {appraisalData.coordinator_remarks}</div>
-            )}
-            {appraisalData?.authority_remarks && !canAuth && (
-              <div style={{ background: '#eff6ff', padding: 15, borderRadius: 8, border: '1px solid #bfdbfe' }}><strong style={{ color: '#1d4ed8' }}>Authority Remarks:</strong> {appraisalData.authority_remarks}</div>
-            )}
+            {appr?.coordinator_remarks && !canCoord && <div style={{ background: '#fdf4ff', padding: 15, borderRadius: 8, border: '1px solid #fae8ff' }}><strong style={{ color: '#86198f' }}>Coordinator Remarks:</strong> {appr.coordinator_remarks}</div>}
+            {appr?.authority_remarks && !canAuth && <div style={{ background: '#eff6ff', padding: 15, borderRadius: 8, border: '1px solid #bfdbfe' }}><strong style={{ color: '#1d4ed8' }}>Authority Remarks:</strong> {appr.authority_remarks}</div>}
 
             <div className="no-print" style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginBottom: 40 }}>
               {canEditOwn && <>
-                <button onClick={() => saveProgress('Draft', 'Draft saved')} disabled={saving} style={{ ...btnBase, flex: '1 1 150px', background: '#64748b' }}>Save Draft</button>
+                <button onClick={() => persist('Draft', 'Draft saved')} disabled={saving} style={{ ...btnBase, flex: '1 1 150px', background: '#64748b' }}>Save Draft</button>
                 <button onClick={submitForReview} disabled={saving} style={{ ...btnBase, flex: '2 1 250px', background: '#2563eb' }}>Submit to Coordinator</button>
               </>}
 
               {canCoord && <>
-                <div style={{ width: '100%' }}><textarea placeholder="Coordinator remarks / recommendations (required to return)..." value={coordinatorRemarks} onChange={e => setCoordinatorRemarks(e.target.value)} style={{ ...S.input, width: '100%', minHeight: 60 }} /></div>
-                <button onClick={() => returnWithRemarks('Returned', 'coordinator')} disabled={saving} style={{ ...btnBase, flex: '1 1 150px', background: '#ef4444' }}>Return to Staff</button>
-                <button onClick={() => saveProgress('Coordinator_Reviewed', 'Forwarded to authority')} disabled={saving} style={{ ...btnBase, flex: '2 1 250px', background: '#8b5cf6' }}>Forward to Authority</button>
+                <div style={{ width: '100%' }}><textarea placeholder="Coordinator remarks / recommendations (required to return)..." value={coordRemarks} onChange={e => setCoordRemarks(e.target.value)} style={{ ...S.input, width: '100%', minHeight: 60 }} /></div>
+                <button onClick={() => returnWith('Returned', 'coordinator')} disabled={saving} style={{ ...btnBase, flex: '1 1 150px', background: '#ef4444' }}>Return to Staff</button>
+                <button onClick={() => persist('Coordinator_Reviewed', 'Forwarded to authority')} disabled={saving} style={{ ...btnBase, flex: '2 1 250px', background: '#8b5cf6' }}>Forward to Authority</button>
               </>}
 
               {canAuth && <>
-                <div style={{ width: '100%' }}><textarea placeholder="Authority final remarks (required to return)..." value={authorityRemarks} onChange={e => setAuthorityRemarks(e.target.value)} style={{ ...S.input, width: '100%', minHeight: 60 }} /></div>
-                <button onClick={() => returnWithRemarks('Submitted', 'authority')} disabled={saving} style={{ ...btnBase, flex: '1 1 150px', background: '#ef4444' }}>Return to Coordinator</button>
-                <button onClick={async () => { if (await confirm('Final approve and lock this appraisal?')) saveProgress('Approved', 'Appraisal approved'); }} disabled={saving} style={{ ...btnBase, flex: '2 1 250px', background: '#16a34a' }}>Final Approve & Lock</button>
+                <div style={{ width: '100%' }}><textarea placeholder="Authority final remarks (required to return)..." value={authRemarks} onChange={e => setAuthRemarks(e.target.value)} style={{ ...S.input, width: '100%', minHeight: 60 }} /></div>
+                <button onClick={() => returnWith('Submitted', 'authority')} disabled={saving} style={{ ...btnBase, flex: '1 1 150px', background: '#ef4444' }}>Return to Coordinator</button>
+                <button onClick={async () => { if (await confirm('Final approve and lock this appraisal? The score will be locked.')) persist('Approved', 'Appraisal approved'); }} disabled={saving} style={{ ...btnBase, flex: '2 1 250px', background: '#16a34a' }}>Final Approve & Lock</button>
               </>}
 
               {status === 'Approved' && (
@@ -1820,7 +1711,7 @@ function AppraisalWorkflowPage({ userRole, profile }) {
                   {userRole === 'admin' && <button onClick={reopen} style={{ ...S.sm('#ef4444'), marginLeft: 12 }}>Reopen</button>}
                 </div>
               )}
-              {isReadOnly && status !== 'Approved' && <div style={{ width: '100%', color: '#64748b', fontSize: 14 }}>This appraisal is currently with: <b>{status === 'Submitted' ? 'Coordinator' : status === 'Coordinator_Reviewed' ? 'Appraisal Authority' : 'Staff member'}</b>. You can view it but not edit it.</div>}
+              {readOnly && status !== 'Approved' && <div style={{ width: '100%', color: '#64748b', fontSize: 14 }}>This appraisal is currently with: <b>{status === 'Submitted' ? 'Coordinator' : status === 'Coordinator_Reviewed' ? 'Appraisal Authority' : 'Staff member'}</b>. You can view it but not edit it.</div>}
             </div>
           </div>
         )}
@@ -1830,23 +1721,22 @@ function AppraisalWorkflowPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 12. REPORTS
+// REPORTS
 // ==========================================
 function ReportsPage() {
   const { toast } = useUI();
   const { list: staff } = useStaff();
   const [raw, setRaw] = useState(null);
   const [dept, setDept] = useState('all');
+  const [month, setMonth] = useState(todayStr().slice(0, 7));
 
   useEffect(() => {
     (async () => {
-      const [ap, ev, du, ta] = await Promise.all([
-        supabase.from('appraisals').select('staff_id, status, final_score, appraisal_ratings(domain_code, rating)').eq('cycle', CYCLE),
-        supabase.from('evidence_files').select('staff_id, domain_code').eq('status', 'Verified'),
-        supabase.from('duty_records').select('staff_id, domain_code, marks').eq('status', 'Completed'),
-        supabase.from('special_tasks').select('staff_id, domain_code, marks').eq('status', 'Completed')
+      const [ap, wk] = await Promise.all([
+        supabase.from('appraisals').select('staff_id, status, final_score, appraisal_sub_ratings(sub_code, rating, self_rating)').eq('cycle', CYCLE),
+        supabase.from('work_items').select('staff_id, kind, status, due_date, month, sub_code, marks, awarded').eq('cycle', CYCLE)
       ]);
-      setRaw({ ap: ap.data || [], ev: ev.data || [], du: du.data || [], ta: ta.data || [] });
+      setRaw({ ap: ap.data || [], wk: wk.data || [] });
     })();
   }, []);
 
@@ -1854,91 +1744,85 @@ function ReportsPage() {
   const matrix = useMemo(() => {
     if (!raw) return [];
     return staff.filter(s => dept === 'all' || s.department === dept).map(s => {
-      const a = raw.ap.find(x => x.staff_id === s.id);
-      if (!a) return { s, a: null };
-      const auto = {};
-      raw.ev.filter(e => e.staff_id === s.id).forEach(e => { if (e.domain_code) auto[e.domain_code] = (auto[e.domain_code] || 0) + 2; });
-      [...raw.du, ...raw.ta].filter(x => x.staff_id === s.id).forEach(x => { if (x.domain_code && x.marks) auto[x.domain_code] = (auto[x.domain_code] || 0) + Number(x.marks); });
-      const rm = {}; (a.appraisal_ratings || []).forEach(r => { rm[r.domain_code] = r.rating; });
-      return { s, a, ...computeScores(rm, auto) };
+      const a = raw.ap.find(x => x.staff_id === s.id) || null;
+      const rm = {};
+      (a?.appraisal_sub_ratings || []).forEach(r => { const v = r.rating ?? r.self_rating; if (v !== null && v !== undefined) rm[r.sub_code] = v; });
+      return { s, a, ...computeScores(rm, workMap(raw.wk.filter(x => x.staff_id === s.id))) };
     });
   }, [raw, staff, dept]);
 
-  const exportMatrix = () => downloadCSV(`Score_Matrix_${CYCLE}.csv`, ['Staff', 'Department', ...domains.map(d => d.code), 'Total', 'Status'],
-    matrix.map(r => [r.s.full_name, r.s.department, ...domains.map(d => r.a ? (r.per[d.code].na ? 'N/A' : r.per[d.code].total.toFixed(1)) : ''), r.a ? r.total.toFixed(1) : '', r.a ? r.a.status : 'Not started']));
+  const cceRows = useMemo(() => !raw ? [] : staff.filter(s => dept === 'all' || s.department === dept).map(s => {
+    const mine = raw.wk.filter(x => x.staff_id === s.id && x.kind === 'cce' && x.month === month);
+    const c = (st) => mine.filter(x => x.status === st).length;
+    return { s, total: mine.length, done: c('Completed'), sub: c('Submitted'), pend: c('Pending') };
+  }).filter(r => r.total > 0), [raw, staff, dept, month]);
 
-  async function quickExport(kind) {
-    const cfg = {
-      evidence: ['evidence_files', '*, profiles(full_name)', ['Staff', 'Title', 'Domain', 'Status', 'Remarks', 'Uploaded', 'File'], r => [r.profiles?.full_name, r.title, r.domain_code, r.status, r.reviewer_remarks, fmtDate(r.created_at), r.file_url]],
-      duties: ['duty_records', '*, profiles(full_name)', ['Staff', 'Title', 'Domain', 'Marks', 'Due', 'Status'], r => [r.profiles?.full_name, r.title, r.domain_code, r.marks, r.end_date, r.status]],
-      tasks: ['special_tasks', '*, profiles(full_name)', ['Staff', 'Title', 'Domain', 'Marks', 'Status'], r => [r.profiles?.full_name, r.title, r.domain_code, r.marks, r.status]],
-      leave: ['leave_requests', '*', ['Staff', 'Type', 'From', 'To', 'Reason', 'Status'], r => [staff.find(s => s.id === r.staff_id)?.full_name, r.leave_type, r.from_date, r.to_date, r.reason, r.status]]
-    }[kind];
-    const { data, error } = await supabase.from(cfg[0]).select(cfg[1]);
+  const cell = (r, d) => r.per[d.code].na ? 'N/A' : r.per[d.code].score.toFixed(1);
+  const exportMatrix = () => downloadCSV(`Score_Matrix_${CYCLE}.csv`, ['Staff', 'Department', ...domains.map(d => d.code), 'Total', 'Status'],
+    matrix.map(r => [r.s.full_name, r.s.department, ...domains.map(d => cell(r, d)), r.total.toFixed(1), r.a ? r.a.status : 'Not started']));
+  const exportCce = () => downloadCSV(`CCE_${month}.csv`, ['Staff', 'Department', 'Total', 'Completed', 'Submitted', 'Pending'], cceRows.map(r => [r.s.full_name, r.s.department, r.total, r.done, r.sub, r.pend]));
+
+  async function exportWork() {
+    const { data, error } = await supabase.from('work_items').select('*, profiles(full_name)').eq('cycle', CYCLE);
     if (error) return toast(error.message, 'error');
-    downloadCSV(`${kind}_${todayStr()}.csv`, cfg[2], (data || []).map(cfg[3]));
+    downloadCSV(`Work_${todayStr()}.csv`, ['Staff', 'Type', 'Title', 'Subject', 'Month', 'Sub-domain', 'Points', 'Awarded', 'Due', 'Status'],
+      (data || []).map(r => [r.profiles?.full_name, r.kind, r.title, r.subject_name, r.month, r.sub_code, r.marks, r.awarded, r.due_date, r.status]));
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={S.card}>
-        <h3 style={{ marginTop: 0 }}>Quick Exports (CSV)</h3>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {[['evidence', 'Evidence'], ['duties', 'Duties'], ['tasks', 'Special Tasks'], ['leave', 'Leave Requests']].map(([k, l]) => <button key={k} onClick={() => quickExport(k)} style={S.btn('#16a34a')}><Download size={16} /> {l}</button>)}
-        </div>
+      <div style={{ ...S.card, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={dept} onChange={e => setDept(e.target.value)} style={S.input}><option value="all">All departments</option>{depts.map(x => <option key={x}>{x}</option>)}</select>
+        <button onClick={exportWork} style={S.btn('#16a34a')}><Download size={16} /> All work records (CSV)</button>
       </div>
 
       <div style={S.card}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
           <h3 style={{ margin: 0 }}>Domain-wise Score Matrix ({CYCLE})</h3>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <select value={dept} onChange={e => setDept(e.target.value)} style={S.input}><option value="all">All departments</option>{depts.map(x => <option key={x}>{x}</option>)}</select>
-            <button onClick={exportMatrix} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>
-          </div>
+          <button onClick={exportMatrix} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>
         </div>
         {!raw ? <Empty text="Loading..." /> : (
-          <Table heads={['Staff', ...domains.map(d => d.code), 'Total', 'Status']} min={900}>
+          <Table heads={['Staff', ...domains.map(d => `${d.code} (${d.weight})`), 'Total /100', 'Status']} min={900}>
             {matrix.map(r => (
               <tr key={r.s.id} style={S.row}>
                 <td style={{ ...S.td, fontWeight: 500 }}>{r.s.full_name}<div style={{ fontSize: 11, color: '#94a3b8' }}>{r.s.department}</div></td>
-                {domains.map(d => <td key={d.code} style={S.td}>{r.a ? (r.per[d.code].na ? 'N/A' : r.per[d.code].total.toFixed(1)) : '-'}</td>)}
-                <td style={{ ...S.td, fontWeight: 700, color: '#2563eb' }}>{r.a ? r.total.toFixed(1) : '-'}</td>
+                {domains.map(d => <td key={d.code} style={{ ...S.td, color: r.per[d.code].na ? '#94a3b8' : 'inherit' }}>{cell(r, d)}</td>)}
+                <td style={{ ...S.td, fontWeight: 700, color: '#2563eb' }}>{r.total.toFixed(1)}</td>
                 <td style={S.td}>{r.a ? <Badge text={r.a.status} /> : <span style={{ color: '#94a3b8' }}>Not started</span>}</td>
               </tr>
             ))}
           </Table>
         )}
-        <div style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>Domain scores include auto marks from verified evidence and completed duties/tasks, capped at the domain weight.</div>
+        <div style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>Live calculation from ratings and approved work. N/A = domain not applicable (excluded, total re-scaled to 100). Final locked scores are on the leaderboard.</div>
+      </div>
+
+      <div style={S.card}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginBottom: 16 }}>
+          <h3 style={{ margin: 0 }}>CCE Tracker</h3>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input type="month" value={month} onChange={e => setMonth(e.target.value)} style={S.input} />
+            <button onClick={exportCce} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>
+          </div>
+        </div>
+        {!raw ? <Empty text="Loading..." /> : cceRows.length === 0 ? <Empty text={`No CCE works for ${monthLabel(month)}.`} /> : (
+          <Table heads={['Staff', 'Total', 'Completed', 'Submitted', 'Pending', 'Progress']} min={640}>
+            {cceRows.map(r => (
+              <tr key={r.s.id} style={S.row}>
+                <td style={{ ...S.td, fontWeight: 500 }}>{r.s.full_name}<div style={{ fontSize: 11, color: '#94a3b8' }}>{r.s.department}</div></td>
+                <td style={S.td}>{r.total}</td><td style={S.td}>{r.done}</td><td style={S.td}>{r.sub}</td>
+                <td style={{ ...S.td, color: r.pend ? '#d97706' : 'inherit', fontWeight: r.pend ? 700 : 400 }}>{r.pend}</td>
+                <td style={{ ...S.td, fontWeight: 700, color: r.done === r.total ? '#16a34a' : '#475569' }}>{Math.round((r.done / r.total) * 100)}%</td>
+              </tr>
+            ))}
+          </Table>
+        )}
       </div>
     </div>
   );
 }
 
 // ==========================================
-// 13. ACTIVITY LOG (admin)
-// ==========================================
-function ActivityLogPage() {
-  const [rows, setRows] = useState([]);
-  const [q, setQ] = useState('');
-  useEffect(() => { supabase.from('activity_log').select('*').order('created_at', { ascending: false }).limit(300).then(({ data }) => setRows(data || [])); }, []);
-  const shown = rows.filter(r => `${r.actor_name} ${r.action} ${r.details}`.toLowerCase().includes(q.toLowerCase()));
-  return (
-    <div style={S.card}>
-      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
-        <SearchBox value={q} onChange={setQ} placeholder="Search activity..." />
-        <button onClick={() => downloadCSV('Activity_Log.csv', ['Time', 'User', 'Action', 'Details'], shown.map(r => [new Date(r.created_at).toLocaleString(), r.actor_name, r.action, r.details]))} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>
-      </div>
-      {shown.length === 0 ? <Empty text="No activity yet." /> : (
-        <Table heads={['Time', 'User', 'Action', 'Details']} min={640}>
-          {shown.map(r => <tr key={r.id} style={S.row}><td style={{ ...S.td, whiteSpace: 'nowrap' }}>{new Date(r.created_at).toLocaleString()}</td><td style={S.td}>{r.actor_name}</td><td style={S.td}>{r.action}</td><td style={{ ...S.td, color: '#64748b' }}>{r.details}</td></tr>)}
-        </Table>
-      )}
-    </div>
-  );
-}
-
-// ==========================================
-// 14. ACCOUNT SETTINGS
+// ACCOUNT SETTINGS
 // ==========================================
 function AccountSettingsPage({ profile, reloadProfile }) {
   const { toast } = useUI();
