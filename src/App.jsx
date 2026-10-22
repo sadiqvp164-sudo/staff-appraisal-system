@@ -11,7 +11,7 @@ import { isSupabaseConfigured, supabase } from './lib/supabase';
 // ==========================================
 const CYCLE = '2026-2027';
 const WORK_SHARE = 0.5; // when a sub-domain has BOTH a rating and work records: 50% work + 50% rating
-const MAX_SUBJECTS = 8;
+const MAX_SUBJECTS = 10;
 
 const RAW_DOMAINS = [
   { code: 'D1', name: 'Teaching, Learning & Learner Achievement', weight: 25, color: '#2563eb', subs: [
