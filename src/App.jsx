@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   ArrowUpRight, Award, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, 
   FileCheck2, FileText, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, 
-  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Send, ThumbsUp
+  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Send, ThumbsUp, Eye
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -20,9 +20,9 @@ const nav = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
   { id: 'scores', label: 'Staff Leaderboard', icon: Award, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
   { id: 'staff', label: 'Staff Directory', icon: Users, roles: ['admin', 'coordinator', 'appraisal_authority'] },
-  { id: 'duties', label: 'Duty & Monitoring', icon: CalendarDays, roles: ['admin', 'coordinator', 'teacher'] },
-  { id: 'tasks', label: 'Special Task & Proposals', icon: ClipboardList, roles: ['admin', 'coordinator', 'teacher'] },
-  { id: 'appraisal', label: 'Seven-Domain Appraisal', icon: GraduationCap, roles: ['admin', 'teacher', 'appraisal_authority', 'coordinator'] },
+  { id: 'duties', label: 'Duty & Tasks', icon: CalendarDays, roles: ['admin', 'coordinator', 'teacher'] },
+  { id: 'evidence', label: 'Evidence Portfolio', icon: FileCheck2, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
+  { id: 'appraisal', label: 'Appraisal Workflow', icon: GraduationCap, roles: ['admin', 'teacher', 'appraisal_authority', 'coordinator'] },
   { id: 'settings', label: 'My Account', icon: Settings, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] }
 ];
 
@@ -152,9 +152,9 @@ function App() {
           {active === 'dashboard' && <DashboardPage />}
           {active === 'scores' && <AllStaffScoresPage />}
           {active === 'staff' && <StaffDirectoryPage currentUserRole={userRole} />}
-          {active === 'duties' && <DutyMonitoringPage userRole={userRole} profile={profile} />}
-          {active === 'tasks' && <SpecialTaskPage userRole={userRole} profile={profile} />}
-          {active === 'appraisal' && <SevenDomainAppraisalPage userRole={userRole} profile={profile} />}
+          {active === 'duties' && <DutyAndTasksPage userRole={userRole} profile={profile} />}
+          {active === 'evidence' && <EvidencePortfolioPage userRole={userRole} profile={profile} />}
+          {active === 'appraisal' && <AppraisalWorkflowPage userRole={userRole} profile={profile} />}
           {active === 'settings' && <AccountSettingsPage profile={profile} />}
         </main>
       </div>
@@ -231,7 +231,7 @@ function DashboardPage() {
 }
 
 // ==========================================
-// 3. STAFF LEADERBOARD
+// 3. STAFF LEADERBOARD (Fixed Score Separation)
 // ==========================================
 function AllStaffScoresPage() {
   const [data, setData] = useState([]);
@@ -244,19 +244,22 @@ function AllStaffScoresPage() {
       const { data: points } = await supabase.from('special_point_entries').select('staff_id, points_approved').eq('status', 'Approved');
 
       const scores = (staff || []).map(s => {
+        // Official Appraisal is capped at 100
         const base = appr?.find(a => a.staff_id === s.id)?.final_score || 0;
-        const sp = points?.filter(p => p.staff_id === s.id).reduce((sum, curr) => sum + curr.points_approved, 0) || 0;
-        const combined = base + sp;
+        const officialScore = Math.min(100, base);
+        
+        // Bonus Points are separate
+        const bonus = points?.filter(p => p.staff_id === s.id).reduce((sum, curr) => sum + curr.points_approved, 0) || 0;
+        
         return {
           ...s,
-          baseScore: base,
-          sp,
-          finalScore: Math.min(100, combined),
-          extra: Math.max(0, combined - 100)
+          officialScore,
+          bonus,
+          totalEarned: officialScore + bonus // Used just for sorting
         };
       });
       
-      scores.sort((a, b) => (b.finalScore + b.extra) - (a.finalScore + a.extra));
+      scores.sort((a, b) => b.totalEarned - a.totalEarned);
       setData(scores);
       setLoading(false);
     }
@@ -265,8 +268,8 @@ function AllStaffScoresPage() {
 
   function downloadCSV() {
     if (data.length === 0) return alert("No data to export");
-    const headers = ['Staff Name', 'Department', 'Appraisal Base', 'Special Points', 'Final Score (Max 100)', 'Extra Points'];
-    const rows = data.map(r => [r.full_name, r.department || '-', r.baseScore.toFixed(2), r.sp, r.finalScore.toFixed(2), r.extra]);
+    const headers = ['Staff Name', 'Department', 'Official Appraisal (Max 100)', 'Bonus Points'];
+    const rows = data.map(r => [r.full_name, r.department || '-', r.officialScore.toFixed(2), r.bonus]);
     let csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
@@ -285,7 +288,7 @@ function AllStaffScoresPage() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h2 style={{ margin: '0 0 10px 0', fontSize: 28, color: '#1e293b' }}>🏆 Performance Leaderboard</h2>
-          <p style={{ color: '#64748b', margin: 0 }}>Top performing staff members based on Appraisal + Special Points.</p>
+          <p style={{ color: '#64748b', margin: 0 }}>Official Appraisal Scores (Max 100) and separate Bonus Points.</p>
         </div>
         <button onClick={downloadCSV} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 'bold' }}><Download size={18} /> Export CSV</button>
       </div>
@@ -298,8 +301,8 @@ function AllStaffScoresPage() {
             </div>
             <div style={{ fontSize: 12, fontWeight: 'bold', color: '#64748b', marginBottom: 5 }}>2nd Place 🥈</div>
             <div style={{ fontWeight: 'bold', fontSize: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{top3[1].full_name}</div>
-            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2563eb', marginTop: 10 }}>{top3[1].finalScore.toFixed(1)}</div>
-            {top3[1].extra > 0 && <div style={{ fontSize: 12, color: '#ea580c', fontWeight: 'bold' }}>+{top3[1].extra} Extra</div>}
+            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2563eb', marginTop: 10 }}>{top3[1].officialScore.toFixed(1)}</div>
+            {top3[1].bonus > 0 && <div style={{ fontSize: 12, color: '#ea580c', fontWeight: 'bold' }}>+{top3[1].bonus} Bonus</div>}
           </div>
         )}
 
@@ -310,8 +313,8 @@ function AllStaffScoresPage() {
             </div>
             <div style={{ fontSize: 14, fontWeight: 'bold', color: '#d97706', marginBottom: 5 }}>1st Place 🥇</div>
             <div style={{ fontWeight: 'bold', fontSize: 18, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{top3[0].full_name}</div>
-            <div style={{ fontSize: 32, fontWeight: 'bold', color: '#2563eb', marginTop: 10 }}>{top3[0].finalScore.toFixed(1)}</div>
-            {top3[0].extra > 0 && <div style={{ fontSize: 14, color: '#ea580c', fontWeight: 'bold' }}>+{top3[0].extra} Extra</div>}
+            <div style={{ fontSize: 32, fontWeight: 'bold', color: '#2563eb', marginTop: 10 }}>{top3[0].officialScore.toFixed(1)}</div>
+            {top3[0].bonus > 0 && <div style={{ fontSize: 14, color: '#ea580c', fontWeight: 'bold' }}>+{top3[0].bonus} Bonus</div>}
           </div>
         )}
 
@@ -322,8 +325,8 @@ function AllStaffScoresPage() {
             </div>
             <div style={{ fontSize: 12, fontWeight: 'bold', color: '#b45309', marginBottom: 5 }}>3rd Place 🥉</div>
             <div style={{ fontWeight: 'bold', fontSize: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{top3[2].full_name}</div>
-            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2563eb', marginTop: 10 }}>{top3[2].finalScore.toFixed(1)}</div>
-            {top3[2].extra > 0 && <div style={{ fontSize: 12, color: '#ea580c', fontWeight: 'bold' }}>+{top3[2].extra} Extra</div>}
+            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2563eb', marginTop: 10 }}>{top3[2].officialScore.toFixed(1)}</div>
+            {top3[2].bonus > 0 && <div style={{ fontSize: 12, color: '#ea580c', fontWeight: 'bold' }}>+{top3[2].bonus} Bonus</div>}
           </div>
         )}
       </div>
@@ -341,7 +344,8 @@ function AllStaffScoresPage() {
                 <div style={{ fontSize: 12, color: '#64748b' }}>{r.department || 'No Dept'}</div>
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontWeight: 'bold', color: '#2563eb', fontSize: 18 }}>{r.finalScore.toFixed(1)}</div>
+                <div style={{ fontWeight: 'bold', color: '#2563eb', fontSize: 18 }}>{r.officialScore.toFixed(1)}</div>
+                {r.bonus > 0 && <div style={{ fontSize: 11, color: '#ea580c', fontWeight: 'bold' }}>+{r.bonus} Bonus</div>}
                 <div style={{ fontSize: 11, color: '#94a3b8' }}>Rank #{idx + 4}</div>
               </div>
             </div>
@@ -354,12 +358,13 @@ function AllStaffScoresPage() {
 }
 
 // ==========================================
-// 4. STAFF DIRECTORY
+// 4. STAFF DIRECTORY (Modal form, no prompts)
 // ==========================================
 function StaffDirectoryPage({ currentUserRole }) {
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [isAdding, setIsAdding] = useState(false);
+  const [showModal, setShowModal] = useState(false);
+  const [formData, setFormData] = useState({ full_name: '', email: '', staff_code: '', department: '', designation: '', role: 'teacher' });
   const fileInputRef = useRef(null);
   const [uploadingFor, setUploadingFor] = useState(null);
 
@@ -372,69 +377,36 @@ function StaffDirectoryPage({ currentUserRole }) {
     setLoading(false);
   }
 
-  async function updateRole(id, newRole) {
-    if (currentUserRole !== 'admin') return alert('Only admins can change roles.');
-    const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', id);
-    if (error) alert(error.message); else fetchStaff();
-  }
+  async function handleAddStaff(e) {
+    e.preventDefault();
+    let finalEmail = formData.email;
+    if (!finalEmail.includes('@')) finalEmail = `${finalEmail.trim()}@staff.local`;
 
-  async function handleAddStaff() {
-    const full_name = prompt("Enter staff full name:"); if (!full_name?.trim()) return;
-    let email = prompt("Enter staff User ID or Email:"); if (!email?.trim()) return;
-    if (!email.includes('@')) email = `${email.trim()}@staff.local`;
-    const staff_code = prompt("Enter staff code:"); if (!staff_code?.trim()) return;
-    const department = prompt("Enter department:"); if (!department?.trim()) return;
-    const designation = prompt("Enter designation:"); if (!designation?.trim()) return;
-
-    setIsAdding(true);
     const { data, error } = await supabase.functions.invoke("create-staff", {
-      body: { full_name: full_name.trim(), email: email, staff_code: staff_code.trim(), department: department.trim(), designation: designation.trim() }
+      body: { 
+        full_name: formData.full_name.trim(), 
+        email: finalEmail, 
+        staff_code: formData.staff_code.trim(), 
+        department: formData.department.trim(), 
+        designation: formData.designation.trim(),
+        role: formData.role
+      }
     });
-    setIsAdding(false);
 
     if (error) {
-      let details = "";
-      try { if (error.context) details = await error.context.text(); } catch { details = "Could not read response"; }
-      alert("Error: " + error.message + "\nDetails: " + details);
-      return;
-    }
-    alert("✅ Staff account created successfully!"); fetchStaff();
-  }
-
-  async function handleUpdateCredentials(userId, currentEmail) {
-    let newEmail = prompt(`Enter new User ID (or Email) for this staff:\n(Current: ${currentEmail || 'N/A'})\nLeave blank to keep unchanged.`);
-    if (newEmail === null) return;
-    const newPassword = prompt(`Enter new Password for this staff:\nLeave blank to keep unchanged.`);
-    if (newPassword === null) return;
-
-    if (!newEmail && !newPassword) return alert("No changes made.");
-
-    let finalEmail = newEmail.trim();
-    if (finalEmail && !finalEmail.includes('@')) finalEmail = `${finalEmail}@staff.local`;
-
-    const bodyData = { target_user_id: userId };
-    if (finalEmail) bodyData.email = finalEmail;
-    if (newPassword.trim()) bodyData.password = newPassword.trim();
-
-    const { data, error } = await supabase.functions.invoke("admin-update-user", { body: bodyData });
-
-    if (error) {
-      let details = "";
-      try { if (error.context) details = await error.context.text(); } catch { details = "Could not read response"; }
-      alert("Error: " + error.message + "\nDetails: " + details);
+      alert("Error: " + error.message);
     } else {
-      alert("✅ Credentials updated successfully!\nUser ID/Email: " + (finalEmail || "Unchanged") + "\nPassword: " + (newPassword ? "Changed" : "Unchanged"));
+      alert("✅ Staff created!");
+      setShowModal(false);
+      setFormData({ full_name: '', email: '', staff_code: '', department: '', designation: '', role: 'teacher' });
       fetchStaff();
     }
   }
 
-  async function deleteStaff(id, name) {
-    if (currentUserRole !== 'admin') return alert('Only admins can remove staff.');
-    if (!window.confirm(`Are you sure you want to remove ${name}?`)) return;
-
-    const { error } = await supabase.from('profiles').delete().eq('id', id);
-    if (error) alert("Error deleting staff: " + error.message);
-    else { alert("✅ Staff profile removed."); fetchStaff(); }
+  async function updateRole(id, newRole) {
+    if (currentUserRole !== 'admin') return alert('Only admins can change roles.');
+    const { error } = await supabase.from('profiles').update({ role: newRole }).eq('id', id);
+    if (error) alert(error.message); else fetchStaff();
   }
 
   async function handlePhotoUpload(e, staffId) {
@@ -444,19 +416,11 @@ function StaffDirectoryPage({ currentUserRole }) {
     
     const filePath = `public/${staffId}_${Date.now()}.jpg`;
     const { error: uploadError } = await supabase.storage.from('avatars').upload(filePath, file);
-    
-    if (uploadError) {
-      alert("Upload Error: " + uploadError.message);
-      setUploadingFor(null);
-      return;
-    }
+    if (uploadError) { alert(uploadError.message); setUploadingFor(null); return; }
 
     const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
-    const { error: dbError } = await supabase.from('profiles').update({ avatar_url: urlData.publicUrl }).eq('id', staffId);
-
-    setUploadingFor(null);
-    if (dbError) alert("DB Error: " + dbError.message);
-    else { alert('✅ Photo updated!'); fetchStaff(); }
+    await supabase.from('profiles').update({ avatar_url: urlData.publicUrl }).eq('id', staffId);
+    setUploadingFor(null); fetchStaff();
   }
 
   return (
@@ -466,15 +430,38 @@ function StaffDirectoryPage({ currentUserRole }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
         <h3 style={{ margin: 0 }}>Staff Members</h3>
         {currentUserRole === 'admin' && (
-          <button onClick={handleAddStaff} disabled={isAdding} style={{ background: '#2563eb', color: '#fff', padding: '8px 16px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-            <Plus size={16} /> {isAdding ? 'Creating...' : 'Add New Staff'}
+          <button onClick={() => setShowModal(true)} style={{ background: '#2563eb', color: '#fff', padding: '8px 16px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <Plus size={16} /> Add New Staff
           </button>
         )}
       </div>
+
+      {showModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
+          <div style={{ background: '#fff', padding: 30, borderRadius: 16, width: '100%', maxWidth: 500 }}>
+            <h2 style={{ marginTop: 0 }}>Add New Staff</h2>
+            <form onSubmit={handleAddStaff} style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
+              <input placeholder="Full Name" value={formData.full_name} onChange={e => setFormData({...formData, full_name: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }} />
+              <input placeholder="User ID or Email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }} />
+              <input placeholder="Staff Code" value={formData.staff_code} onChange={e => setFormData({...formData, staff_code: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }} />
+              <input placeholder="Department" value={formData.department} onChange={e => setFormData({...formData, department: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }} />
+              <input placeholder="Designation" value={formData.designation} onChange={e => setFormData({...formData, designation: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }} />
+              <select value={formData.role} onChange={e => setFormData({...formData, role: e.target.value})} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }}>
+                <option value="teacher">Teacher</option><option value="coordinator">Coordinator</option><option value="appraisal_authority">Appraisal Authority</option>
+              </select>
+              <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+                <button type="button" onClick={() => setShowModal(false)} style={{ flex: 1, padding: 12, borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer' }}>Cancel</button>
+                <button type="submit" style={{ flex: 1, padding: 12, borderRadius: 8, border: 'none', background: '#2563eb', color: '#fff', fontWeight: 'bold', cursor: 'pointer' }}>Create Account</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {loading ? <p>Loading...</p> : (
         <div className="table-responsive">
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: 700 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Photo</th><th style={{ padding: 12 }}>Name & Email</th><th style={{ padding: 12 }}>Role</th><th style={{ padding: 12 }}>Department</th>{currentUserRole === 'admin' && <th style={{ padding: 12, textAlign: 'right' }}>Actions</th>}</tr></thead>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Photo</th><th style={{ padding: 12 }}>Name & Email</th><th style={{ padding: 12 }}>Role</th><th style={{ padding: 12 }}>Department</th></tr></thead>
             <tbody>
               {staff.map(s => (
                 <tr key={s.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
@@ -499,16 +486,6 @@ function StaffDirectoryPage({ currentUserRole }) {
                     ) : (<span style={{ textTransform: 'capitalize' }}>{s.role.replaceAll('_', ' ')}</span>)}
                   </td>
                   <td style={{ padding: 12 }}>{s.department || '-'}</td>
-                  {currentUserRole === 'admin' && (
-                    <td style={{ padding: 12, display: 'flex', gap: 5, justifyContent: 'flex-end' }}>
-                      <button onClick={() => handleUpdateCredentials(s.id, s.email)} style={{ padding: '6px 12px', background: '#475569', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <Key size={14} /> Edit Login
-                      </button>
-                      <button onClick={() => deleteStaff(s.id, s.full_name)} style={{ padding: '6px 12px', background: '#ef4444', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <Trash2 size={14} /> Remove
-                      </button>
-                    </td>
-                  )}
                 </tr>
               ))}
             </tbody>
@@ -520,412 +497,259 @@ function StaffDirectoryPage({ currentUserRole }) {
 }
 
 // ==========================================
-// 5. DUTIES & MONITORING (With Bulk CCE & Start/End Dates)
+// 5. DUTIES & TASKS
 // ==========================================
-function DutyMonitoringPage({ userRole, profile }) {
+function DutyAndTasksPage({ userRole, profile }) {
+  const [activeTab, setActiveTab] = useState('duties');
   const [duties, setDuties] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', start_date: '', end_date: '', domain_code: 'D3', marks: 5 });
-  const [showForm, setShowForm] = useState(false);
   
-  // Bulk CCE state
-  const [showBulkForm, setShowBulkForm] = useState(false);
-  const [bulkForm, setBulkForm] = useState({ title: 'CCE Work', staff_id: '', count: 4, end_date: '', marks: 2 });
+  const [showDutyForm, setShowDutyForm] = useState(false);
+  const [dutyForm, setDutyForm] = useState({ title: '', staff_id: '', end_date: '', domain_code: 'D3', marks: 5 });
+  
+  const [showTaskForm, setShowTaskForm] = useState(false);
+  const [taskForm, setTaskForm] = useState({ title: '', staff_id: '', domain_code: 'D7', marks: 5 });
+
+  const isAdmin = userRole === 'admin' || userRole === 'coordinator';
 
   useEffect(() => {
-    fetchDuties();
-    if (userRole !== 'teacher') supabase.from('profiles').select('id, full_name').eq('active', true).then(({ data }) => setStaffList(data || []));
-  }, [userRole]);
+    fetchData();
+    if (isAdmin) supabase.from('profiles').select('id, full_name').eq('active', true).then(({ data }) => setStaffList(data || []));
+  }, [isAdmin]);
 
-  async function fetchDuties() {
-    let query = supabase.from('duty_records').select('*, profiles(full_name)');
-    if (userRole === 'teacher') query = query.eq('staff_id', profile?.id);
-    const { data } = await query.order('created_at', { ascending: false });
-    setDuties(data || []);
+  async function fetchData() {
+    let dQuery = supabase.from('duty_records').select('*, profiles(full_name)');
+    if (userRole === 'teacher') dQuery = dQuery.eq('staff_id', profile?.id);
+    const { data: dData } = await dQuery.order('created_at', { ascending: false });
+    setDuties(dData || []);
+
+    let tQuery = supabase.from('special_tasks').select('*, profiles(full_name)');
+    if (userRole === 'teacher') tQuery = tQuery.eq('staff_id', profile?.id);
+    const { data: tData } = await tQuery.order('created_at', { ascending: false });
+    setTasks(tData || []);
   }
 
-  async function handleAssign(e) {
+  async function assignDuty(e) {
     e.preventDefault();
-    if (!form.title || !form.staff_id) return alert('Please fill all fields');
-    
-    const { error } = await supabase.from('duty_records').insert({ 
-      title: form.title, 
-      staff_id: form.staff_id, 
-      start_date: form.start_date || null,
-      end_date: form.end_date || null, 
-      status: 'Pending',
-      domain_code: form.domain_code,
-      marks: Number(form.marks)
-    });
-    
-    if (error) return alert("Error: " + error.message);
-    
-    alert('✅ Duty Assigned!'); 
-    setForm({ title: '', staff_id: '', start_date: '', end_date: '', domain_code: 'D3', marks: 5 }); 
-    setShowForm(false); 
-    fetchDuties();
+    await supabase.from('duty_records').insert({ ...dutyForm, status: 'Pending' });
+    alert('Duty Assigned!'); setShowDutyForm(false); setDutyForm({ title: '', staff_id: '', end_date: '', domain_code: 'D3', marks: 5 }); fetchData();
   }
 
-  // Bulk Generate Function (For CCE)
-  async function handleBulkAssign(e) {
+  async function createTask(e) {
     e.preventDefault();
-    if (!bulkForm.staff_id || !bulkForm.title || !bulkForm.count) return alert('Fill all fields');
-    
-    const records = [];
-    for (let i = 1; i <= bulkForm.count; i++) {
-      records.push({
-        title: `${bulkForm.title} ${i}`,
-        staff_id: bulkForm.staff_id,
-        end_date: bulkForm.end_date || null,
-        status: 'Pending',
-        domain_code: 'D1', // Defaulting CCE to D1
-        marks: Number(bulkForm.marks)
-      });
-    }
-
-    const { error } = await supabase.from('duty_records').insert(records);
-    if (error) return alert("Error: " + error.message);
-    
-    alert(`✅ ${bulkForm.count} CCE Works Assigned!`); 
-    setShowBulkForm(false); 
-    fetchDuties();
+    await supabase.from('special_tasks').insert({ ...taskForm, status: 'Pending' });
+    alert('Task Created!'); setShowTaskForm(false); setTaskForm({ title: '', staff_id: '', domain_code: 'D7', marks: 5 }); fetchData();
   }
 
-  async function markDone(id) { await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', id); fetchDuties(); }
-
-  async function deleteDuty(id) {
-    if (userRole !== 'admin') return alert('Only admins can delete duties.');
-    if (!window.confirm("Are you sure you want to delete this duty record?")) return;
-    await supabase.from('duty_records').delete().eq('id', id);
-    fetchDuties();
+  async function markDone(type, id) {
+    const table = type === 'duty' ? 'duty_records' : 'special_tasks';
+    await supabase.from(table).update({ status: 'Completed' }).eq('id', id);
+    fetchData();
   }
-  
-  const today = new Date().toISOString().split('T')[0];
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {(userRole === 'admin' || userRole === 'coordinator') && (
+      <div style={{ display: 'flex', gap: 10, borderBottom: '1px solid #e2e8f0', paddingBottom: 10 }}>
+        <button onClick={() => setActiveTab('duties')} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: activeTab === 'duties' ? '#2563eb' : '#fff', color: activeTab === 'duties' ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>Duties & Monitoring</button>
+        <button onClick={() => setActiveTab('tasks')} style={{ padding: '10px 20px', borderRadius: 8, border: 'none', background: activeTab === 'tasks' ? '#2563eb' : '#fff', color: activeTab === 'tasks' ? '#fff' : '#475569', cursor: 'pointer', fontWeight: 'bold' }}>Special Tasks</button>
+      </div>
+
+      {activeTab === 'duties' && (
         <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-          
-          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-            <button onClick={() => { setShowForm(!showForm); setShowBulkForm(false); }} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
-            </button>
-            <button onClick={() => { setShowBulkForm(!showBulkForm); setShowForm(false); }} style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <ClipboardList size={18} /> {showBulkForm ? 'Cancel' : 'Bulk Assign CCE Works'}
-            </button>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+            <h3 style={{ margin: 0 }}>Duty Records</h3>
+            {isAdmin && <button onClick={() => setShowDutyForm(!showDutyForm)} style={{ background: '#2563eb', color: '#fff', padding: '8px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }}><Plus size={16}/> Assign Duty</button>}
           </div>
           
-          {showForm && (
-            <form onSubmit={handleAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
-              <label style={{ flex: '1 1 200px' }}>Duty Title:<br/>
-                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Weekly Cleaning" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-              
-              <label style={{ flex: '1 1 150px' }}>Assign To Staff:<br/>
-                <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                  <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                </select>
-              </label>
-
-              <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
-                <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                  {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
-                </select>
-              </label>
-              
-              <label style={{ flex: '0 1 100px' }}>Marks:<br/>
-                <input type="number" min="1" max="25" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-              
-              <label style={{ flex: '1 1 150px' }}>Start Date:<br/>
-                <input type="date" value={form.start_date} onChange={e => setForm({...form, start_date: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
-              </label>
-
-              <label style={{ flex: '1 1 150px' }}>End Date:<br/>
-                <input type="date" value={form.end_date} onChange={e => setForm({...form, end_date: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
-              </label>
-              
-              <button type="submit" style={{ background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>Save</button>
+          {showDutyForm && (
+            <form onSubmit={assignDuty} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', background: '#f8fafc', padding: 15, borderRadius: 8, marginBottom: 20 }}>
+              <input placeholder="Duty Title" value={dutyForm.title} onChange={e => setDutyForm({...dutyForm, title: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', flex: 1 }} />
+              <select value={dutyForm.staff_id} onChange={e => setDutyForm({...dutyForm, staff_id: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }}>
+                <option value="">Select Staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+              </select>
+              <select value={dutyForm.domain_code} onChange={e => setDutyForm({...dutyForm, domain_code: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }}>
+                {domains.map(d => <option key={d.code} value={d.code}>{d.code}</option>)}
+              </select>
+              <input type="number" placeholder="Marks" value={dutyForm.marks} onChange={e => setDutyForm({...dutyForm, marks: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', width: 80 }} />
+              <input type="date" value={dutyForm.end_date} onChange={e => setDutyForm({...dutyForm, end_date: e.target.value})} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }} />
+              <button type="submit" style={{ background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer' }}>Save</button>
             </form>
           )}
 
-          {showBulkForm && (
-            <form onSubmit={handleBulkAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, alignItems: 'flex-end', background: '#fdf4ff', padding: 15, borderRadius: 8, border: '1px solid #fae8ff' }}>
-              <div style={{ width: '100%', marginBottom: 5 }}><strong>Bulk Generate CCE Works</strong> (Assigns multiple D1 tasks at once)</div>
-              
-              <label style={{ flex: '1 1 200px' }}>Task Base Name:<br/>
-                <input value={bulkForm.title} onChange={e => setBulkForm({...bulkForm, title: e.target.value})} placeholder="e.g. CCE Work" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-              
-              <label style={{ flex: '1 1 150px' }}>Select Teacher:<br/>
-                <select value={bulkForm.staff_id} onChange={e => setBulkForm({...bulkForm, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                  <option value="">-- Select Teacher --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                </select>
-              </label>
-
-              <label style={{ flex: '0 1 100px' }}>How Many?:<br/>
-                <input type="number" min="1" max="10" value={bulkForm.count} onChange={e => setBulkForm({...bulkForm, count: e.target.value })} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-              
-              <label style={{ flex: '0 1 100px' }}>Marks Each:<br/>
-                <input type="number" min="1" max="25" value={bulkForm.marks} onChange={e => setBulkForm({...bulkForm, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-
-              <label style={{ flex: '1 1 150px' }}>Deadline (End Date):<br/>
-                <input type="date" value={bulkForm.end_date} onChange={e => setBulkForm({...bulkForm, end_date: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-              
-              <button type="submit" style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>Generate</button>
-            </form>
-          )}
-        </div>
-      )}
-      
-      <div style={{ background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #e2e8f0' }}>
-        <h3>Duty Records</h3>
-        <div className="table-responsive">
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 600 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Duty & Domain</th><th style={{ padding: 12 }}>Dates</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12, textAlign: 'left' }}>Staff</th><th style={{ padding: 12, textAlign: 'left' }}>Title</th><th style={{ padding: 12, textAlign: 'left' }}>Domain</th><th style={{ padding: 12, textAlign: 'left' }}>Status</th><th style={{ padding: 12, textAlign: 'left' }}>Action</th></tr></thead>
             <tbody>
-              {duties.map(d => {
-                const isOverdue = d.end_date && d.end_date < today && d.status !== 'Completed';
-                return (
-                  <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9', background: isOverdue ? '#fef2f2' : 'transparent' }}>
-                    <td style={{ padding: 12 }}>{d.profiles?.full_name}</td>
-                    <td style={{ padding: 12 }}>
-                      <b>{d.title}</b><br/>
-                      <span style={{fontSize: 11, color: '#64748b'}}>{d.domain_code || 'No Domain'} (+{d.marks || 0} Marks)</span>
-                    </td>
-                    <td style={{ padding: 12, color: isOverdue ? '#ef4444' : 'inherit', fontWeight: isOverdue ? 'bold' : 'normal' }}>
-                      {d.start_date && <div style={{fontSize: 12}}>Start: {d.start_date}</div>}
-                      {d.end_date && <div style={{fontSize: 12}}>End: {d.end_date} {isOverdue && <AlertTriangle size={12} style={{ display: 'inline', marginLeft: 3 }} />}</div>}
-                      {!d.start_date && !d.end_date && '-'}
-                    </td>
-                    <td style={{ padding: 12 }}>
-                      <span style={{ padding: '4px 8px', borderRadius: 12, background: d.status === 'Completed' ? '#dcfce7' : '#fef3c7', color: d.status === 'Completed' ? '#166534' : '#92400e', fontSize: 12 }}>{d.status}</span>
-                    </td>
-                    <td style={{ padding: 12, display: 'flex', gap: 8 }}>
-                      {d.status !== 'Completed' && (
-                        <button onClick={() => markDone(d.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <Check size={14} /> Mark Done
-                        </button>
-                      )}
-                      {d.status === 'Completed' && (
-                        <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <CheckCircle2 size={16} /> Completed
-                        </span>
-                      )}
-                      {userRole === 'admin' && (
-                        <button onClick={() => deleteDuty(d.id)} style={{ padding: '6px', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: 6, cursor: 'pointer' }} title="Delete Duty">
-                          <Trash2 size={16} />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
+              {duties.map(d => (
+                <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: 12 }}>{d.profiles?.full_name}</td>
+                  <td style={{ padding: 12 }}>{d.title}</td>
+                  <td style={{ padding: 12 }}>{d.domain_code} (+{d.marks})</td>
+                  <td style={{ padding: 12 }}><span style={{ padding: '4px 8px', background: d.status === 'Completed' ? '#dcfce7' : '#fef3c7', color: d.status === 'Completed' ? '#166534' : '#92400e', borderRadius: 12, fontSize: 12 }}>{d.status}</span></td>
+                  <td style={{ padding: 12 }}>{d.status !== 'Completed' && <button onClick={() => markDone('duty', d.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Mark Done</button>}</td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
-      </div>
+      )}
+
+      {activeTab === 'tasks' && (
+        <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 20 }}>
+            <h3 style={{ margin: 0 }}>Special Tasks</h3>
+            {isAdmin && <button onClick={() => setShowTaskForm(!showTaskForm)} style={{ background: '#2563eb', color: '#fff', padding: '8px 16px', borderRadius: 8, border: 'none', cursor: 'pointer' }}><Plus size={16}/> Create Task</button>}
+          </div>
+
+          {showTaskForm && (
+            <form onSubmit={createTask} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', background: '#f8fafc', padding: 15, borderRadius: 8, marginBottom: 20 }}>
+              <input placeholder="Task Title" value={taskForm.title} onChange={e => setTaskForm({...taskForm, title: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', flex: 1 }} />
+              <select value={taskForm.staff_id} onChange={e => setTaskForm({...taskForm, staff_id: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }}>
+                <option value="">Select Staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+              </select>
+              <select value={taskForm.domain_code} onChange={e => setTaskForm({...taskForm, domain_code: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }}>
+                {domains.map(d => <option key={d.code} value={d.code}>{d.code}</option>)}
+              </select>
+              <input type="number" placeholder="Marks" value={taskForm.marks} onChange={e => setTaskForm({...taskForm, marks: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', width: 80 }} />
+              <button type="submit" style={{ background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer' }}>Save</button>
+            </form>
+          )}
+
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12, textAlign: 'left' }}>Staff</th><th style={{ padding: 12, textAlign: 'left' }}>Title</th><th style={{ padding: 12, textAlign: 'left' }}>Domain</th><th style={{ padding: 12, textAlign: 'left' }}>Status</th><th style={{ padding: 12, textAlign: 'left' }}>Action</th></tr></thead>
+            <tbody>
+              {tasks.map(t => (
+                <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                  <td style={{ padding: 12 }}>{t.profiles?.full_name}</td>
+                  <td style={{ padding: 12 }}>{t.title}</td>
+                  <td style={{ padding: 12 }}>{t.domain_code} (+{t.marks})</td>
+                  <td style={{ padding: 12 }}><span style={{ padding: '4px 8px', background: t.status === 'Completed' ? '#dcfce7' : '#fef3c7', color: t.status === 'Completed' ? '#166534' : '#92400e', borderRadius: 12, fontSize: 12 }}>{t.status}</span></td>
+                  <td style={{ padding: 12 }}>{t.status !== 'Completed' && <button onClick={() => markDone('task', t.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Mark Done</button>}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
 
 // ==========================================
-// 6. SPECIAL TASKS & PROPOSALS (With File Upload for Teaching Plan)
+// 6. EVIDENCE PORTFOLIO (New Page)
 // ==========================================
-function SpecialTaskPage({ userRole, profile }) {
-  const [tasks, setTasks] = useState([]);
-  const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', domain_code: 'D7', marks: 5 });
-  const [showForm, setShowForm] = useState(false);
+function EvidencePortfolioPage({ userRole, profile }) {
+  const [evidence, setEvidence] = useState([]);
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [form, setForm] = useState({ title: '', domain_code: 'D1' });
   const fileRef = useRef(null);
 
-  useEffect(() => {
-    fetchTasks();
-    if (userRole !== 'teacher') supabase.from('profiles').select('id, full_name').eq('active', true).then(({ data }) => setStaffList(data || []));
-  }, [userRole]);
+  const isReviewer = userRole === 'admin' || userRole === 'coordinator' || userRole === 'appraisal_authority';
 
-  async function fetchTasks() {
-    let query = supabase.from('special_tasks').select('*, profiles(full_name)');
-    if (userRole === 'teacher') query = query.eq('staff_id', profile?.id);
-    const { data } = await query.order('created_at', { ascending: false });
-    setTasks(data || []);
+  useEffect(() => { fetchEvidence(); }, []);
+
+  async function fetchEvidence() {
+    let query = supabase.from('evidence_files').select('*, profiles(full_name)').order('created_at', { ascending: false });
+    if (!isReviewer) query = query.eq('staff_id', profile?.id);
+    const { data } = await query;
+    setEvidence(data || []);
   }
 
-  async function handleCreate(e) {
+  async function handleUpload(e) {
     e.preventDefault();
-    if (!form.title || !form.staff_id) return alert('Fill all fields');
-    await supabase.from('special_tasks').insert({ 
-      title: form.title, staff_id: form.staff_id, 
-      status: 'Pending', domain_code: form.domain_code, marks: Number(form.marks)
-    });
-    alert('✅ Task Created!'); setForm({ title: '', staff_id: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
-  }
-
-  async function handlePropose(e) {
-    e.preventDefault();
-    if (!form.title) return alert('Enter activity title');
+    if (!file || !form.title) return alert("Fill all fields");
     setUploading(true);
 
-    let fileUrl = null;
-    if (file) {
-      const filePath = `${profile.id}/${Date.now()}_${file.name}`;
-      const { error: uploadError } = await supabase.storage.from('evidence').upload(filePath, file);
-      if (uploadError) {
-        alert("File upload failed: " + uploadError.message);
-        setUploading(false);
-        return;
-      }
-      const { data: urlData } = supabase.storage.from('evidence').getPublicUrl(filePath);
-      fileUrl = urlData.publicUrl;
-    }
+    const filePath = `${profile.id}/${Date.now()}_${file.name}`;
+    const { error: uploadError } = await supabase.storage.from('evidence').upload(filePath, file);
+    if (uploadError) { alert(uploadError.message); setUploading(false); return; }
 
-    // If it's a teaching plan, auto-approve and give D1 marks
-    const isTeachingPlan = form.title.toLowerCase().includes('teaching plan');
-    const status = isTeachingPlan ? 'Completed' : 'Proposed';
-    const domain = isTeachingPlan ? 'D1' : null;
-    const marks = isTeachingPlan ? 2 : 0;
-
-    await supabase.from('special_tasks').insert({ 
-      title: form.title, staff_id: profile.id, status: status,
-      domain_code: domain, marks: marks, file_url: fileUrl
+    const { data: urlData } = supabase.storage.from('evidence').getPublicUrl(filePath);
+    
+    const { error: dbError } = await supabase.from('evidence_files').insert({
+      staff_id: profile.id,
+      domain_code: form.domain_code,
+      title: form.title,
+      file_url: urlData.publicUrl,
+      status: 'Pending'
     });
 
     setUploading(false);
-    alert(isTeachingPlan ? '✅ Teaching Plan Uploaded & Marks Auto-Added!' : '✅ Proposal Submitted!'); 
-    setForm({ title: '', staff_id: '', domain_code: 'D7', marks: 5 }); setFile(null); if(fileRef.current) fileRef.current.value = '';
-    setShowForm(false); fetchTasks();
+    if (dbError) alert(dbError.message);
+    else { alert('✅ Evidence Uploaded! Waiting for review.'); setForm({ title: '', domain_code: 'D1' }); setFile(null); if(fileRef.current) fileRef.current.value = ''; fetchEvidence(); }
   }
 
-  async function approveProposal(task) {
-    const domain = prompt("Enter Domain Code (D1 to D7):", "D7");
-    if (!domain) return;
-    const marks = prompt("Enter Marks to award for this activity:", "5");
-    if (!marks) return;
-
-    const { error } = await supabase.from('special_tasks').update({ 
-      domain_code: domain, marks: Number(marks), status: 'Completed' 
-    }).eq('id', task.id);
-    
-    if (error) alert(error.message);
-    else { alert('✅ Approved & Marks Added!'); fetchTasks(); }
+  async function handleReview(id, newStatus) {
+    const remarks = prompt("Enter remarks (optional):");
+    await supabase.from('evidence_files').update({ status: newStatus, reviewer_remarks: remarks }).eq('id', id);
+    fetchEvidence();
   }
-
-  async function markDone(id) { await supabase.from('special_tasks').update({ status: 'Completed' }).eq('id', id); fetchTasks(); }
-  
-  const isAdmin = userRole === 'admin' || userRole === 'coordinator' || userRole === 'appraisal_authority';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-        <button onClick={() => setShowForm(!showForm)} style={{ background: isAdmin ? '#2563eb' : '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {isAdmin ? <Plus size={18} /> : <Send size={18} />} {showForm ? 'Cancel' : (isAdmin ? 'Create Special Task' : 'Propose Activity / Upload Teaching Plan')}
-        </button>
-        
-        {showForm && (
-          <form onSubmit={isAdmin ? handleCreate : handlePropose} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginTop: 20, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
-            <label style={{ flex: '1 1 200px' }}>Title:<br/>
-              <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder={isAdmin ? "Task name..." : "e.g. Monthly Teaching Plan"} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-            </label>
-
-            {isAdmin && (
-              <>
-                <label style={{ flex: '1 1 150px' }}>Assign To:<br/>
-                  <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                    <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                  </select>
-                </label>
-                <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
-                  <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                    {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
-                  </select>
-                </label>
-                <label style={{ flex: '0 1 100px' }}>Marks:<br/>
-                  <input type="number" min="1" max="10" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-                </label>
-              </>
-            )}
-
-            {!isAdmin && (
-              <label style={{ flex: '1 1 250px' }}>Upload File (Optional):<br/>
-                <input type="file" ref={fileRef} onChange={e => setFile(e.target.files[0])} style={{ width: '100%', padding: 8, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box', background: '#fff' }} />
-                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>If title contains "Teaching Plan", marks auto-add to D1.</div>
-              </label>
-            )}
-
-            <button type="submit" disabled={uploading} style={{ background: isAdmin ? '#16a34a' : '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>{uploading ? 'Uploading...' : (isAdmin ? 'Save' : 'Submit')}</button>
+      {!isReviewer && (
+        <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
+          <h3>Upload New Evidence</h3>
+          <form onSubmit={handleUpload} style={{ display: 'flex', gap: 15, alignItems: 'center', flexWrap: 'wrap', marginTop: 15 }}>
+            <input placeholder="Evidence Title (e.g., Lesson Plan)" value={form.title} onChange={e => setForm({...form, title: e.target.value})} required style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', flex: '1 1 200px' }} />
+            <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1' }}>
+              {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
+            </select>
+            <input type="file" ref={fileRef} onChange={e => setFile(e.target.files[0])} required style={{ padding: 8, border: '1px solid #cbd5e1', borderRadius: 8 }} />
+            <button type="submit" disabled={uploading} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer' }}>{uploading ? 'Uploading...' : 'Upload'}</button>
           </form>
-        )}
-      </div>
-
-      <div style={{ background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #e2e8f0' }}>
-        <h3>Special Tasks & Proposals</h3>
-        <div className="table-responsive">
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 700 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Title & Domain</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
-            <tbody>
-              {tasks.map(t => (
-                <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9', background: t.status === 'Proposed' ? '#fdf4ff' : 'transparent' }}>
-                  <td style={{ padding: 12 }}>{t.profiles?.full_name}</td>
-                  <td style={{ padding: 12 }}>
-                    <b>{t.title}</b> {t.file_url && <a href={t.file_url} target="_blank" rel="noreferrer" style={{fontSize:12, color:'#2563eb', marginLeft:5}}>View File</a>}<br/>
-                    {t.domain_code && <span style={{fontSize: 11, color: '#64748b'}}>{t.domain_code} (+{t.marks || 0} Marks)</span>}
-                  </td>
-                  <td style={{ padding: 12 }}>
-                    <span style={{ 
-                      padding: '4px 8px', borderRadius: 12, fontSize: 12, fontWeight: 'bold',
-                      background: t.status === 'Completed' ? '#dcfce7' : t.status === 'Proposed' ? '#fae8ff' : '#fef3c7', 
-                      color: t.status === 'Completed' ? '#166534' : t.status === 'Proposed' ? '#86198f' : '#92400e' 
-                    }}>{t.status}</span>
-                  </td>
-                  <td style={{ padding: 12 }}>
-                    {t.status === 'Proposed' && isAdmin && (
-                      <button onClick={() => approveProposal(t)} style={{ padding: '6px 12px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <ThumbsUp size={14} /> Approve & Assign
-                      </button>
-                    )}
-                    {t.status === 'Pending' && (
-                      <button onClick={() => markDone(t.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <Check size={14} /> Mark Done
-                      </button>
-                    )}
-                    {t.status === 'Completed' && (
-                      <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 5 }}>
-                        <CheckCircle2 size={16} /> Completed
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-              {tasks.length === 0 && <tr><td colSpan="4" style={{ padding: 20, textAlign: 'center' }}>No tasks or proposals found.</td></tr>}
-            </tbody>
-          </table>
         </div>
+      )}
+
+      <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
+        <h3>Evidence Records</h3>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 15 }}>
+          <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12, textAlign: 'left' }}>Staff</th><th style={{ padding: 12, textAlign: 'left' }}>Title</th><th style={{ padding: 12, textAlign: 'left' }}>Domain</th><th style={{ padding: 12, textAlign: 'left' }}>Status</th><th style={{ padding: 12, textAlign: 'left' }}>Action</th></tr></thead>
+          <tbody>
+            {evidence.map(ev => (
+              <tr key={ev.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                <td style={{ padding: 12 }}>{ev.profiles?.full_name}</td>
+                <td style={{ padding: 12 }}><a href={ev.file_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>{ev.title}</a></td>
+                <td style={{ padding: 12 }}>{ev.domain_code}</td>
+                <td style={{ padding: 12 }}>
+                  <span style={{ padding: '4px 8px', background: ev.status === 'Verified' ? '#dcfce7' : ev.status === 'Rejected' ? '#fee2e2' : '#fef3c7', color: ev.status === 'Verified' ? '#166534' : ev.status === 'Rejected' ? '#991b1b' : '#92400e', borderRadius: 12, fontSize: 12 }}>{ev.status}</span>
+                  {ev.reviewer_remarks && <div style={{ fontSize: 11, color: '#ef4444', marginTop: 4 }}>Remarks: {ev.reviewer_remarks}</div>}
+                </td>
+                <td style={{ padding: 12 }}>
+                  {isReviewer && ev.status === 'Pending' && (
+                    <div style={{ display: 'flex', gap: 5 }}>
+                      <button onClick={() => handleReview(ev.id, 'Verified')} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6, cursor: 'pointer' }}>Verify</button>
+                      <button onClick={() => handleReview(ev.id, 'Rejected')} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6, cursor: 'pointer' }}>Reject</button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );
 }
 
 // ==========================================
-// 7. SEVEN DOMAIN APPRAISAL
+// 7. APPRAISAL WORKFLOW (Teacher -> Coord -> Authority)
 // ==========================================
-function SevenDomainAppraisalPage({ userRole, profile }) {
+function AppraisalWorkflowPage({ userRole, profile }) {
   const [staffList, setStaffList] = useState([]);
   const [selectedStaff, setSelectedStaff] = useState('');
+  const [appraisalData, setAppraisalData] = useState(null);
   const [ratings, setRatings] = useState({});
   const [comments, setComments] = useState({});
   const [status, setStatus] = useState('Draft');
   const [saving, setSaving] = useState(false);
-  const [penalty, setPenalty] = useState({ count: 0, marks: 0 });
-  const [autoMarks, setAutoMarks] = useState({}); 
+  const [coordinatorRemarks, setCoordinatorRemarks] = useState('');
+  const [authorityRemarks, setAuthorityRemarks] = useState('');
 
   const isTeacher = userRole === 'teacher';
-  const isReviewer = userRole === 'admin' || userRole === 'appraisal_authority' || userRole === 'coordinator';
+  const isCoordinator = userRole === 'coordinator' || userRole === 'admin';
+  const isAuthority = userRole === 'appraisal_authority' || userRole === 'admin';
 
   useEffect(() => {
     if (isTeacher) { setSelectedStaff(profile?.id); setStaffList([{id: profile?.id, full_name: profile?.full_name}]); } 
@@ -935,84 +759,96 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
   useEffect(() => {
     if (!selectedStaff) return;
     
-    supabase.from('appraisals').select('id, status, appraisal_ratings(domain_code, rating, comments)').eq('staff_id', selectedStaff).eq('cycle', '2026-2027').maybeSingle().then(({ data }) => {
+    supabase.from('appraisals').select('*, appraisal_ratings(domain_code, rating, comments)').eq('staff_id', selectedStaff).eq('cycle', '2026-2027').maybeSingle().then(({ data }) => {
       if (data) {
+        setAppraisalData(data);
         setStatus(data.status || 'Draft');
+        setCoordinatorRemarks(data.coordinator_remarks || '');
+        setAuthorityRemarks(data.authority_remarks || '');
         if (data.appraisal_ratings) {
           const rMap = {}, cMap = {};
           data.appraisal_ratings.forEach(r => { rMap[r.domain_code] = r.rating; cMap[r.domain_code] = r.comments; });
           setRatings(rMap); setComments(cMap);
         }
-      } else { setStatus('Draft'); setRatings({}); setComments({}); }
+      } else { 
+        setAppraisalData(null); setStatus('Draft'); setRatings({}); setComments({}); setCoordinatorRemarks(''); setAuthorityRemarks('');
+      }
     });
+  }, [selectedStaff]);
 
-    const today = new Date().toISOString().split('T')[0];
+  // Calculate Auto Marks (Only from Verified Evidence & Completed Tasks)
+  const [autoMarks, setAutoMarks] = useState({});
+  useEffect(() => {
+    if (!selectedStaff) return;
     Promise.all([
-      supabase.from('duty_records').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').lt('end_date', today),
-      supabase.from('special_tasks').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').neq('status', 'Proposed')
-    ]).then(([dutiesRes, tasksRes]) => {
-      const overdueCount = (dutiesRes.data?.length || 0) + (tasksRes.data?.length || 0);
-      setPenalty({ count: overdueCount, marks: overdueCount * 2 });
-    });
-
-    Promise.all([
+      supabase.from('evidence_files').select('domain_code').eq('staff_id', selectedStaff).eq('status', 'Verified'),
       supabase.from('duty_records').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed'),
       supabase.from('special_tasks').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed')
-    ]).then(([duties, tasks]) => {
+    ]).then(([evRes, dutyRes, taskRes]) => {
       const marksMap = {};
-      [...(duties.data || []), ...(tasks.data || [])].forEach(item => {
-        if (item.domain_code && item.marks) {
-          marksMap[item.domain_code] = (marksMap[item.domain_code] || 0) + Number(item.marks);
-        }
+      // Evidence gives 2 marks per verified item
+      (evRes.data || []).forEach(item => { if(item.domain_code) marksMap[item.domain_code] = (marksMap[item.domain_code] || 0) + 2; });
+      // Duties & Tasks give their assigned marks
+      [...(dutyRes.data || []), ...(taskRes.data || [])].forEach(item => {
+        if (item.domain_code && item.marks) marksMap[item.domain_code] = (marksMap[item.domain_code] || 0) + Number(item.marks);
       });
       setAutoMarks(marksMap);
     });
+  }, [selectedStaff, status]);
 
-  }, [selectedStaff]);
-
-  const calculateDomainTotal = (domainCode, weight) => {
+  const getDomainTotal = (domainCode, weight) => {
     const manualScore = ((ratings[domainCode] || 0) / 5) * weight;
     const autoScore = autoMarks[domainCode] || 0;
-    return Math.min(weight, manualScore + autoScore); 
+    return Math.min(weight, manualScore + autoScore); // Max weight limit
   };
 
-  const grandTotal = domains.reduce((sum, d) => sum + calculateDomainTotal(d.code, d.weight), 0);
-  const totalScore = Math.max(0, grandTotal - penalty.marks);
+  const totalScore = domains.reduce((sum, d) => sum + getDomainTotal(d.code, d.weight), 0);
 
-  async function handleAction(actionType) {
+  async function saveProgress(newStatus, remarksToSave = null) {
     if (!selectedStaff) return alert('Select staff first');
     setSaving(true);
-    let newStatus = status;
-    if (actionType === 'submit') newStatus = 'Submitted';
-    if (actionType === 'approve') newStatus = 'Approved';
-    if (actionType === 'return') newStatus = 'Returned';
-    if (actionType === 'draft') newStatus = isTeacher ? 'Draft' : status;
+
+    const payload = { 
+      staff_id: selectedStaff, 
+      cycle: '2026-2027', 
+      final_score: totalScore, 
+      status: newStatus,
+      coordinator_remarks: isCoordinator ? coordinatorRemarks : (appraisalData?.coordinator_remarks || null),
+      authority_remarks: isAuthority ? authorityRemarks : (appraisalData?.authority_remarks || null)
+    };
 
     try {
-      const { data: appr, error: apprErr } = await supabase.from('appraisals').upsert({ 
-        staff_id: selectedStaff, cycle: '2026-2027', final_score: totalScore, status: newStatus,
-        submitted_at: newStatus === 'Submitted' ? new Date().toISOString() : undefined,
-        approved_at: newStatus === 'Approved' ? new Date().toISOString() : undefined
-      }, { onConflict: 'staff_id,cycle' }).select().single();
+      const { data: appr, error: apprErr } = await supabase.from('appraisals').upsert(payload, { onConflict: 'staff_id,cycle' }).select().single();
       if (apprErr) throw apprErr;
 
       const ratingRows = domains.map(d => ({ appraisal_id: appr.id, domain_code: d.code, rating: ratings[d.code] || 3, comments: comments[d.code] || '' }));
-      const { error: rateErr } = await supabase.from('appraisal_ratings').upsert(ratingRows, { onConflict: 'appraisal_id,domain_code' });
-      if (rateErr) throw rateErr;
+      await supabase.from('appraisal_ratings').upsert(ratingRows, { onConflict: 'appraisal_id,domain_code' });
+      
       setStatus(newStatus);
+      alert('✅ Saved Successfully!');
     } catch (err) { alert('Error: ' + err.message); } finally { setSaving(false); }
   }
 
-  const isReadOnly = status === 'Approved' || (isTeacher && status === 'Submitted');
-  const statusColor = { 'Draft': { bg: '#f1f5f9', text: '#475569' }, 'Submitted': { bg: '#e0e7ff', text: '#3730a3' }, 'Returned': { bg: '#fee2e2', text: '#991b1b' }, 'Approved': { bg: '#dcfce7', text: '#166534' } }[status] || { bg: '#f1f5f9', text: '#475569' };
+  const isReadOnly = 
+    status === 'Approved' || 
+    (isTeacher && status !== 'Draft' && status !== 'Returned') ||
+    (isCoordinator && !isAuthority && status !== 'Submitted' && status !== 'Coordinator_Reviewed');
+
+  const statusColor = { 
+    'Draft': { bg: '#f1f5f9', text: '#475569' }, 
+    'Submitted': { bg: '#e0e7ff', text: '#3730a3' }, 
+    'Coordinator_Reviewed': { bg: '#fae8ff', text: '#86198f' },
+    'Returned': { bg: '#fee2e2', text: '#991b1b' }, 
+    'Approved': { bg: '#dcfce7', text: '#166534' } 
+  }[status] || { bg: '#f1f5f9', text: '#475569' };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 15 }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 15, marginBottom: 10 }}>
-            <h3 style={{ margin: 0 }}>Evaluate Staff</h3>
-            <span style={{ padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 'bold', background: statusColor.bg, color: statusColor.text }}>Status: {status}</span>
+            <h3 style={{ margin: 0 }}>Appraisal Status</h3>
+            <span style={{ padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 'bold', background: statusColor.bg, color: statusColor.text }}>{status}</span>
           </div>
           <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)} disabled={isTeacher} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minWidth: 200 }}>
             <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
@@ -1020,24 +856,17 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
         </div>
         
         <div style={{ textAlign: 'right', background: '#f8fafc', padding: 15, borderRadius: 8, border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: 13, color: '#64748b' }}>Overall Total Score</div>
-          <div style={{ fontSize: 28, fontWeight: 'bold', color: '#2563eb', marginTop: 5 }}>{totalScore.toFixed(2)} <span style={{fontSize: 14, color: '#94a3b8'}}>/ 100</span></div>
-          {penalty.count > 0 && <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 'bold', marginTop: 4 }}>Penalty Applied: -{penalty.marks} Marks</div>}
+          <div style={{ fontSize: 13, color: '#64748b' }}>Official Appraisal Score (Max 100)</div>
+          <div style={{ fontSize: 28, fontWeight: 'bold', color: '#2563eb', marginTop: 5 }}>{totalScore.toFixed(2)}</div>
         </div>
       </div>
 
       {selectedStaff && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
-          {penalty.count > 0 && (
-            <div style={{ background: '#fee2e2', color: '#991b1b', padding: 15, borderRadius: 8, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 10 }}>
-              <AlertTriangle size={20} /> Warning: This staff has {penalty.count} overdue incomplete tasks. Penalty applied.
-            </div>
-          )}
-
           {domains.map(d => {
             const autoMark = autoMarks[d.code] || 0;
             const manualMark = ((ratings[d.code] || 0) / 5) * d.weight;
-            const domainTotal = calculateDomainTotal(d.code, d.weight);
+            const domainTotal = getDomainTotal(d.code, d.weight);
             
             return (
               <div key={d.code} style={{ background: isReadOnly ? '#f8fafc' : '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
@@ -1052,7 +881,7 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
                       <span>Manual:</span> <span>{manualMark.toFixed(1)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: autoMark > 0 ? '#16a34a' : '#94a3b8', fontWeight: 'bold', marginBottom: 4 }}>
-                      <span>Auto (Tasks):</span> <span>+{autoMark}</span>
+                      <span>Auto (Evidence/Tasks):</span> <span>+{autoMark}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 'bold', color: d.color, borderTop: '1px solid #cbd5e1', paddingTop: 4 }}>
                       <span>Total:</span> <span>{domainTotal.toFixed(1)}</span>
@@ -1065,29 +894,60 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
                       {val} - {val === 5 ? 'Exceptional' : val === 4 ? 'Strong' : val === 3 ? 'Expected' : val === 2 ? 'Developing' : 'Unsatisfactory'}
                     </button>
                   ))}
+                  <button disabled={isReadOnly} onClick={() => setRatings(prev => ({...prev, [d.code]: null}))} style={{ flex: '0 0 60px', padding: 10, borderRadius: 8, border: ratings[d.code] === null ? `2px solid #64748b` : '1px solid #cbd5e1', background: ratings[d.code] === null ? '#f1f5f9' : '#fff', cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, color: '#475569' }}>N/A</button>
                 </div>
-                <textarea readOnly={isReadOnly} placeholder="Comments..." value={comments[d.code] || ''} onChange={e => setComments(prev => ({...prev, [d.code]: e.target.value}))} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minHeight: 60, fontFamily: 'inherit', background: isReadOnly ? '#f1f5f9' : '#fff', boxSizing: 'border-box' }} />
+                <textarea readOnly={isReadOnly} placeholder="Comments/Reflections..." value={comments[d.code] || ''} onChange={e => setComments(prev => ({...prev, [d.code]: e.target.value}))} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minHeight: 60, fontFamily: 'inherit', background: isReadOnly ? '#f1f5f9' : '#fff', boxSizing: 'border-box' }} />
               </div>
             );
           })}
-          
+
+          {/* Remarks Sections */}
+          {appraisalData?.coordinator_remarks && (
+            <div style={{ background: '#fdf4ff', padding: 15, borderRadius: 8, border: '1px solid #fae8ff' }}>
+              <strong style={{ color: '#86198f' }}>Coordinator Remarks:</strong> {appraisalData.coordinator_remarks}
+            </div>
+          )}
+          {appraisalData?.authority_remarks && (
+            <div style={{ background: '#eff6ff', padding: 15, borderRadius: 8, border: '1px solid #bfdbfe' }}>
+              <strong style={{ color: '#1d4ed8' }}>Authority Remarks:</strong> {appraisalData.authority_remarks}
+            </div>
+          )}
+
+          {/* Action Buttons by Role */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginBottom: 40 }}>
+            
             {isTeacher && (status === 'Draft' || status === 'Returned') && (
               <>
-                <button onClick={() => handleAction('draft')} disabled={saving} style={{ flex: '1 1 150px', background: '#64748b', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontSize: 16, fontWeight: 'bold', cursor: 'pointer' }}>Save as Draft</button>
-                <button onClick={() => handleAction('submit')} disabled={saving} style={{ flex: '2 1 250px', background: '#2563eb', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontSize: 16, fontWeight: 'bold', cursor: 'pointer' }}>Submit Self-Appraisal</button>
+                <button onClick={() => saveProgress('Draft')} disabled={saving} style={{ flex: '1 1 150px', background: '#64748b', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Save Draft</button>
+                <button onClick={() => saveProgress('Submitted')} disabled={saving} style={{ flex: '2 1 250px', background: '#2563eb', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Submit to Coordinator</button>
               </>
             )}
-            {isReviewer && status === 'Submitted' && (
+
+            {isCoordinator && status === 'Submitted' && (
               <>
-                <button onClick={() => handleAction('return')} disabled={saving} style={{ flex: '1 1 150px', background: '#ef4444', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontSize: 16, fontWeight: 'bold', cursor: 'pointer' }}>Return</button>
-                <button onClick={() => handleAction('draft')} disabled={saving} style={{ flex: '1 1 150px', background: '#64748b', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontSize: 16, fontWeight: 'bold', cursor: 'pointer' }}>Save Changes</button>
-                <button onClick={() => handleAction('approve')} disabled={saving} style={{ flex: '2 1 250px', background: '#16a34a', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontSize: 16, fontWeight: 'bold', cursor: 'pointer' }}>Approve & Finalize</button>
+                <div style={{ width: '100%', marginBottom: 10 }}>
+                  <textarea placeholder="Enter Coordinator Remarks / Recommendations..." value={coordinatorRemarks} onChange={e => setCoordinatorRemarks(e.target.value)} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minHeight: 60 }} />
+                </div>
+                <button onClick={() => saveProgress('Returned')} disabled={saving} style={{ flex: '1 1 150px', background: '#ef4444', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Return for Edit</button>
+                <button onClick={() => saveProgress('Coordinator_Reviewed')} disabled={saving} style={{ flex: '2 1 250px', background: '#8b5cf6', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Forward to Authority</button>
               </>
             )}
-            {status === 'Approved' && (<div style={{ width: '100%', padding: 16, background: '#dcfce7', color: '#166534', borderRadius: 8, textAlign: 'center', fontWeight: 'bold' }}>✅ This appraisal has been Approved and Finalized.</div>)}
-            {isTeacher && status === 'Submitted' && (<div style={{ width: '100%', padding: 16, background: '#e0e7ff', color: '#3730a3', borderRadius: 8, textAlign: 'center', fontWeight: 'bold' }}>⏳ Waiting for review.</div>)}
-            {isReviewer && (status === 'Draft' || status === 'Returned') && (<div style={{ width: '100%', padding: 16, background: '#fef3c7', color: '#92400e', borderRadius: 8, textAlign: 'center', fontWeight: 'bold' }}>⏳ Waiting for Staff to submit.</div>)}
+
+            {isAuthority && status === 'Coordinator_Reviewed' && (
+              <>
+                <div style={{ width: '100%', marginBottom: 10 }}>
+                  <textarea placeholder="Enter Authority Final Remarks..." value={authorityRemarks} onChange={e => setAuthorityRemarks(e.target.value)} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minHeight: 60 }} />
+                </div>
+                <button onClick={() => saveProgress('Returned')} disabled={saving} style={{ flex: '1 1 150px', background: '#ef4444', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Return to Coordinator</button>
+                <button onClick={() => saveProgress('Approved')} disabled={saving} style={{ flex: '2 1 250px', background: '#16a34a', color: '#fff', padding: 16, borderRadius: 8, border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>Final Approve & Lock</button>
+              </>
+            )}
+
+            {status === 'Approved' && (
+              <div style={{ width: '100%', padding: 16, background: '#dcfce7', color: '#166534', borderRadius: 8, textAlign: 'center', fontWeight: 'bold' }}>
+                ✅ This appraisal has been Final Approved.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1152,7 +1012,6 @@ function AccountSettingsPage({ profile }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
           <div><strong>Name:</strong> {profile?.full_name}</div>
           <div><strong>Role:</strong> <span style={{ textTransform: 'capitalize' }}>{profile?.role.replaceAll('_', ' ')}</span></div>
-          <div><strong>Email:</strong> {profile?.email || 'Hidden (Check Supabase)'}</div>
         </div>
       </div>
 
