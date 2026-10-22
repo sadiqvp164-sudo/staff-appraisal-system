@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   ArrowUpRight, Award, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, 
   FileCheck2, FileText, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, 
-  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Medal
+  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Medal, Send, ThumbsUp
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -21,12 +21,9 @@ const nav = [
   { id: 'scores', label: 'Staff Leaderboard', icon: Award, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
   { id: 'staff', label: 'Staff Directory', icon: Users, roles: ['admin', 'coordinator', 'appraisal_authority'] },
   { id: 'duties', label: 'Duty & Monitoring', icon: CalendarDays, roles: ['admin', 'coordinator', 'teacher'] },
-  { id: 'tasks', label: 'Special Task Register', icon: ClipboardList, roles: ['admin', 'coordinator', 'teacher'] },
-  { id: 'evidence', label: 'Evidence Portfolio', icon: FileCheck2, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
+  { id: 'tasks', label: 'Special Task & Proposals', icon: ClipboardList, roles: ['admin', 'coordinator', 'teacher'] },
   { id: 'appraisal', label: 'Seven-Domain Appraisal', icon: GraduationCap, roles: ['admin', 'teacher', 'appraisal_authority', 'coordinator'] },
   { id: 'points', label: 'Special Points', icon: Award, roles: ['admin', 'appraisal_authority'] },
-  { id: 'development', label: 'Development Plan', icon: Target, roles: ['admin', 'teacher', 'appraisal_authority'] },
-  { id: 'reports', label: 'Reports & Development', icon: FileText, roles: ['admin', 'appraisal_authority'] },
   { id: 'settings', label: 'My Account', icon: Settings, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] }
 ];
 
@@ -158,11 +155,8 @@ function App() {
           {active === 'staff' && <StaffDirectoryPage currentUserRole={userRole} />}
           {active === 'duties' && <DutyMonitoringPage userRole={userRole} profile={profile} />}
           {active === 'tasks' && <SpecialTaskPage userRole={userRole} profile={profile} />}
-          {active === 'evidence' && <EvidencePortfolioPage userRole={userRole} profile={profile} />}
           {active === 'appraisal' && <SevenDomainAppraisalPage userRole={userRole} profile={profile} />}
           {active === 'points' && <SpecialPointsPage />}
-          {active === 'development' && <DevelopmentPlanPage userRole={userRole} profile={profile} />}
-          {active === 'reports' && <ReportsPage />}
           {active === 'settings' && <AccountSettingsPage profile={profile} />}
         </main>
       </div>
@@ -239,7 +233,7 @@ function DashboardPage() {
 }
 
 // ==========================================
-// 3. STAFF LEADERBOARD
+// 3. STAFF LEADERBOARD (With CSV Export)
 // ==========================================
 function AllStaffScoresPage() {
   const [data, setData] = useState([]);
@@ -271,6 +265,18 @@ function AllStaffScoresPage() {
     fetchScores();
   }, []);
 
+  function downloadCSV() {
+    if (data.length === 0) return alert("No data to export");
+    const headers = ['Staff Name', 'Department', 'Appraisal Base', 'Special Points', 'Final Score (Max 100)', 'Extra Points'];
+    const rows = data.map(r => [r.full_name, r.department || '-', r.baseScore.toFixed(2), r.sp, r.finalScore.toFixed(2), r.extra]);
+    let csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", "Staff_Leaderboard_2026-2027.csv");
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+  }
+
   if (loading) return <div>Loading Scores...</div>;
 
   const top3 = data.slice(0, 3);
@@ -278,9 +284,12 @@ function AllStaffScoresPage() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 30 }}>
-      <div style={{ textAlign: 'center' }}>
-        <h2 style={{ margin: '0 0 10px 0', fontSize: 28, color: '#1e293b' }}>🏆 Performance Leaderboard</h2>
-        <p style={{ color: '#64748b', margin: 0 }}>Top performing staff members based on Appraisal + Special Points.</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <div>
+          <h2 style={{ margin: '0 0 10px 0', fontSize: 28, color: '#1e293b' }}>🏆 Performance Leaderboard</h2>
+          <p style={{ color: '#64748b', margin: 0 }}>Top performing staff members based on Appraisal + Special Points.</p>
+        </div>
+        <button onClick={downloadCSV} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 'bold' }}><Download size={18} /> Export CSV</button>
       </div>
 
       <div className="podium-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 20, flexWrap: 'wrap', marginTop: 20 }}>
@@ -513,13 +522,14 @@ function StaffDirectoryPage({ currentUserRole }) {
 }
 
 // ==========================================
-// 5. DUTIES & TASKS (Auto-Marks Setup)
+// 5. DUTIES & MONITORING (Bulk & Auto Generate)
 // ==========================================
 function DutyMonitoringPage({ userRole, profile }) {
   const [duties, setDuties] = useState([]);
   const [staffList, setStaffList] = useState([]);
   const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 });
   const [showForm, setShowForm] = useState(false);
+  const [assignToAll, setAssignToAll] = useState(false);
 
   useEffect(() => {
     fetchDuties();
@@ -535,16 +545,49 @@ function DutyMonitoringPage({ userRole, profile }) {
 
   async function handleAssign(e) {
     e.preventDefault();
-    if (!form.title || !form.staff_id) return alert('Fill all fields');
-    await supabase.from('duty_records').insert({ 
-      title: form.title, 
-      staff_id: form.staff_id, 
-      deadline: form.deadline || null, 
+    if (!form.title || (!form.staff_id && !assignToAll)) return alert('Fill all fields');
+    
+    if (assignToAll) {
+      const rows = staffList.map(s => ({ 
+        title: form.title, 
+        staff_id: s.id, 
+        deadline: form.deadline || null, 
+        status: 'Pending',
+        domain_code: form.domain_code,
+        marks: Number(form.marks)
+      }));
+      await supabase.from('duty_records').insert(rows);
+    } else {
+      await supabase.from('duty_records').insert({ 
+        title: form.title, 
+        staff_id: form.staff_id, 
+        deadline: form.deadline || null, 
+        status: 'Pending',
+        domain_code: form.domain_code,
+        marks: Number(form.marks)
+      });
+    }
+    
+    alert('✅ Duty Assigned!'); 
+    setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 }); 
+    setAssignToAll(false);
+    setShowForm(false); 
+    fetchDuties();
+  }
+
+  async function generateStandardDuties() {
+    if (!window.confirm("This will assign a standard 'Weekly Prep/Dars Monitoring' (D3, 2 Marks) duty to ALL active staff. Continue?")) return;
+    const rows = staffList.map(s => ({ 
+      title: "Weekly Prep/Dars Monitoring", 
+      staff_id: s.id, 
+      deadline: null, 
       status: 'Pending',
-      domain_code: form.domain_code,
-      marks: Number(form.marks)
-    });
-    alert('✅ Duty Assigned!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 }); setShowForm(false); fetchDuties();
+      domain_code: 'D3',
+      marks: 2
+    }));
+    await supabase.from('duty_records').insert(rows);
+    alert('✅ Standard Duties Generated for all staff!');
+    fetchDuties();
   }
 
   async function markDone(id) { await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', id); fetchDuties(); }
@@ -555,19 +598,33 @@ function DutyMonitoringPage({ userRole, profile }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {(userRole === 'admin' || userRole === 'coordinator') && (
         <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-          <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
-          </button>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+            <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
+            </button>
+            <button onClick={generateStandardDuties} style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <CalendarDays size={18} /> Auto-Generate Weekly Duties
+            </button>
+          </div>
+          
           {showForm && (
-            <form onSubmit={handleAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginTop: 20, alignItems: 'flex-end' }}>
+            <form onSubmit={handleAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
               <label style={{ flex: '1 1 200px' }}>Duty Title:<br/>
                 <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. CCE Exam Work" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
-              <label style={{ flex: '1 1 150px' }}>Assign To:<br/>
-                <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                  <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                </select>
+              
+              <label style={{ flex: '1 1 200px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5 }}>
+                  <input type="checkbox" checked={assignToAll} onChange={e => setAssignToAll(e.target.checked)} /> 
+                  <span style={{ fontWeight: 'bold', color: '#2563eb' }}>Assign to All Staff</span>
+                </div>
+                {!assignToAll && (
+                  <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required={!assignToAll}>
+                    <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                  </select>
+                )}
               </label>
+
               <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
                 <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
                   {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
@@ -628,6 +685,9 @@ function DutyMonitoringPage({ userRole, profile }) {
   );
 }
 
+// ==========================================
+// 6. SPECIAL TASKS & PROPOSALS
+// ==========================================
 function SpecialTaskPage({ userRole, profile }) {
   const [tasks, setTasks] = useState([]);
   const [staffList, setStaffList] = useState([]);
@@ -646,152 +706,128 @@ function SpecialTaskPage({ userRole, profile }) {
     setTasks(data || []);
   }
 
+  // അഡ്മിൻ ടാസ്ക് ക്രിയേറ്റ് ചെയ്യാൻ
   async function handleCreate(e) {
     e.preventDefault();
     if (!form.title || !form.staff_id) return alert('Fill all fields');
     await supabase.from('special_tasks').insert({ 
-      title: form.title, 
-      staff_id: form.staff_id, 
-      deadline: form.deadline || null, 
-      status: 'Pending',
-      domain_code: form.domain_code,
-      marks: Number(form.marks)
+      title: form.title, staff_id: form.staff_id, deadline: form.deadline || null, 
+      status: 'Pending', domain_code: form.domain_code, marks: Number(form.marks)
     });
     alert('✅ Task Created!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
   }
 
-  async function markDone(id) { await supabase.from('special_tasks').update({ status: 'Completed' }).eq('id', id); fetchTasks(); }
-
-  const today = new Date().toISOString().split('T')[0];
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {(userRole === 'admin' || userRole === 'coordinator') && (
-        <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-          <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Plus size={18} /> {showForm ? 'Cancel' : 'Create Special Task'}
-          </button>
-          {showForm && (
-            <form onSubmit={handleCreate} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginTop: 20, alignItems: 'flex-end' }}>
-              <label style={{ flex: '1 1 200px' }}>Task Title:<br/>
-                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Lead New Project" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-              <label style={{ flex: '1 1 150px' }}>Assign To:<br/>
-                <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                  <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                </select>
-              </label>
-              <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
-                <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
-                  {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
-                </select>
-              </label>
-              <label style={{ flex: '0 1 100px' }}>Marks:<br/>
-                <input type="number" min="1" max="10" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
-              </label>
-              <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
-                <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
-              </label>
-              <button type="submit" style={{ background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>Save</button>
-            </form>
-          )}
-        </div>
-      )}
-      <div style={{ background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #e2e8f0' }}>
-        <h3>Special Tasks</h3>
-        <div className="table-responsive">
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 600 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Task & Domain</th><th style={{ padding: 12 }}>Deadline</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
-            <tbody>
-              {tasks.map(t => {
-                const isOverdue = t.deadline && t.deadline < today && t.status !== 'Completed';
-                return (
-                  <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9', background: isOverdue ? '#fef2f2' : 'transparent' }}>
-                    <td style={{ padding: 12 }}>{t.profiles?.full_name}</td>
-                    <td style={{ padding: 12 }}>
-                      <b>{t.title}</b><br/>
-                      <span style={{fontSize: 11, color: '#64748b'}}>{t.domain_code || 'No Domain'} (+{t.marks || 0} Marks)</span>
-                    </td>
-                    <td style={{ padding: 12, color: isOverdue ? '#ef4444' : 'inherit', fontWeight: isOverdue ? 'bold' : 'normal' }}>
-                      {t.deadline || '-'} {isOverdue && <AlertTriangle size={14} style={{ display: 'inline', marginLeft: 5 }} />}
-                    </td>
-                    <td style={{ padding: 12 }}>
-                      <span style={{ padding: '4px 8px', borderRadius: 12, background: t.status === 'Completed' ? '#dcfce7' : '#fef3c7', color: t.status === 'Completed' ? '#166534' : '#92400e', fontSize: 12 }}>{t.status}</span>
-                    </td>
-                    <td style={{ padding: 12 }}>
-                      {t.status !== 'Completed' && (
-                        <button onClick={() => markDone(t.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <Check size={14} /> Mark Done
-                        </button>
-                      )}
-                      {t.status === 'Completed' && (
-                        <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 5 }}>
-                          <CheckCircle2 size={16} /> Completed
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 6. EVIDENCE PORTFOLIO
-// ==========================================
-function EvidencePortfolioPage({ userRole, profile }) {
-  const [files, setFiles] = useState([]);
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef(null);
-
-  useEffect(() => { fetchFiles(); }, []);
-
-  async function fetchFiles() {
-    const { data } = await supabase.from('evidence_files').select('*, profiles(full_name)').order('uploaded_at', { ascending: false });
-    setFiles(data || []);
-  }
-
-  async function handleUpload(e) {
+  // ടീച്ചർ ഒരു ആക്ടിവിറ്റി പ്രൊപ്പോസ് ചെയ്യാൻ (Marks/Domain ഇല്ലാതെ)
+  async function handlePropose(e) {
     e.preventDefault();
-    const file = fileRef.current.files[0];
-    if (!file) return alert('Select a file first');
-    setUploading(true);
-    const filePath = `${profile?.id}/${Date.now()}_${file.name}`;
-    const { error: uploadError } = await supabase.storage.from('evidence').upload(filePath, file);
-    if (uploadError) { alert(uploadError.message); setUploading(false); return; }
-    const { data: urlData } = supabase.storage.from('evidence').getPublicUrl(filePath);
-    const { error: dbError } = await supabase.from('evidence_files').insert({ staff_id: profile?.id, file_name: file.name, file_path: filePath, file_url: urlData.publicUrl, category: 'General' });
-    setUploading(false);
-    if (dbError) alert(dbError.message); else { alert('✅ File uploaded!'); fetchFiles(); fileRef.current.value = ''; }
+    if (!form.title) return alert('Enter activity title');
+    await supabase.from('special_tasks').insert({ 
+      title: form.title, staff_id: profile.id, status: 'Proposed'
+    });
+    alert('✅ Proposal Submitted for Approval!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
   }
+
+  // അഡ്മിൻ പ്രൊപ്പോസൽ അപ്രൂവ് ചെയ്യാൻ
+  async function approveProposal(task) {
+    const domain = prompt("Enter Domain Code (D1 to D7):", "D7");
+    if (!domain) return;
+    const marks = prompt("Enter Marks to award for this activity:", "5");
+    if (!marks) return;
+
+    const { error } = await supabase.from('special_tasks').update({ 
+      domain_code: domain, 
+      marks: Number(marks), 
+      status: 'Completed' 
+    }).eq('id', task.id);
+    
+    if (error) alert(error.message);
+    else { alert('✅ Approved & Marks Added!'); fetchTasks(); }
+  }
+
+  async function markDone(id) { await supabase.from('special_tasks').update({ status: 'Completed' }).eq('id', id); fetchTasks(); }
+  
+  const today = new Date().toISOString().split('T')[0];
+  const isAdmin = userRole === 'admin' || userRole === 'coordinator' || userRole === 'appraisal_authority';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {(userRole === 'teacher' || userRole === 'admin' || userRole === 'coordinator') && (
-        <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-          <h3>Upload New Evidence</h3>
-          <form onSubmit={handleUpload} style={{ display: 'flex', gap: 15, alignItems: 'center', marginTop: 15, flexWrap: 'wrap' }}>
-            <input type="file" ref={fileRef} style={{ padding: 10, border: '1px solid #cbd5e1', borderRadius: 8, flex: '1 1 200px', width: '100%' }} />
-            <button type="submit" disabled={uploading} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', flex: '0 0 auto' }}><Upload size={18} /> {uploading ? 'Uploading...' : 'Upload'}</button>
-          </form>
-        </div>
-      )}
       <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-        <h3>Uploaded Documents</h3>
+        <button onClick={() => setShowForm(!showForm)} style={{ background: isAdmin ? '#2563eb' : '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+          {isAdmin ? <Plus size={18} /> : <Send size={18} />} {showForm ? 'Cancel' : (isAdmin ? 'Create Special Task' : 'Propose New Activity')}
+        </button>
+        
+        {showForm && (
+          <form onSubmit={isAdmin ? handleCreate : handlePropose} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginTop: 20, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
+            <label style={{ flex: '1 1 200px' }}>Activity Title:<br/>
+              <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="Describe what you did..." style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+            </label>
+
+            {isAdmin && (
+              <>
+                <label style={{ flex: '1 1 150px' }}>Assign To:<br/>
+                  <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
+                    <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                  </select>
+                </label>
+                <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
+                  <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
+                    {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
+                  </select>
+                </label>
+                <label style={{ flex: '0 1 100px' }}>Marks:<br/>
+                  <input type="number" min="1" max="10" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+                </label>
+                <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
+                  <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
+                </label>
+              </>
+            )}
+            <button type="submit" style={{ background: isAdmin ? '#16a34a' : '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>{isAdmin ? 'Save' : 'Submit for Approval'}</button>
+          </form>
+        )}
+      </div>
+
+      <div style={{ background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #e2e8f0' }}>
+        <h3>Special Tasks & Proposals</h3>
         <div className="table-responsive">
-          <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 15, minWidth: 500 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12, textAlign: 'left' }}>Staff</th><th style={{ padding: 12, textAlign: 'left' }}>File Name</th><th style={{ padding: 12, textAlign: 'left' }}>Date</th><th style={{ padding: 12, textAlign: 'left' }}>Action</th></tr></thead>
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 700 }}>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Activity & Domain</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
             <tbody>
-              {files.map(f => (
-                <tr key={f.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: 12 }}>{f.profiles?.full_name}</td><td style={{ padding: 12 }}>{f.file_name}</td><td style={{ padding: 12 }}>{new Date(f.uploaded_at).toLocaleDateString()}</td><td style={{ padding: 12 }}><a href={f.file_url} target="_blank" rel="noreferrer" style={{ color: '#2563eb' }}>View File</a></td>
+              {tasks.map(t => (
+                <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9', background: t.status === 'Proposed' ? '#fdf4ff' : 'transparent' }}>
+                  <td style={{ padding: 12 }}>{t.profiles?.full_name}</td>
+                  <td style={{ padding: 12 }}>
+                    <b>{t.title}</b><br/>
+                    {t.domain_code && <span style={{fontSize: 11, color: '#64748b'}}>{t.domain_code} (+{t.marks || 0} Marks)</span>}
+                  </td>
+                  <td style={{ padding: 12 }}>
+                    <span style={{ 
+                      padding: '4px 8px', borderRadius: 12, fontSize: 12, fontWeight: 'bold',
+                      background: t.status === 'Completed' ? '#dcfce7' : t.status === 'Proposed' ? '#fae8ff' : '#fef3c7', 
+                      color: t.status === 'Completed' ? '#166534' : t.status === 'Proposed' ? '#86198f' : '#92400e' 
+                    }}>{t.status}</span>
+                  </td>
+                  <td style={{ padding: 12 }}>
+                    {/* അഡ്മിൻ പ്രൊപ്പോസൽ അപ്രൂവ് ചെയ്യാൻ */}
+                    {t.status === 'Proposed' && isAdmin && (
+                      <button onClick={() => approveProposal(t)} style={{ padding: '6px 12px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <ThumbsUp size={14} /> Approve & Assign
+                      </button>
+                    )}
+                    {t.status === 'Pending' && (
+                      <button onClick={() => markDone(t.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <Check size={14} /> Mark Done
+                      </button>
+                    )}
+                    {t.status === 'Completed' && (
+                      <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <CheckCircle2 size={16} /> Completed
+                      </span>
+                    )}
+                  </td>
                 </tr>
               ))}
+              {tasks.length === 0 && <tr><td colSpan="4" style={{ padding: 20, textAlign: 'center' }}>No tasks or proposals found.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -801,7 +837,7 @@ function EvidencePortfolioPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 7. SEVEN DOMAIN APPRAISAL (Fixed Auto-Marks Logic)
+// 7. SEVEN DOMAIN APPRAISAL (Auto-Marks)
 // ==========================================
 function SevenDomainAppraisalPage({ userRole, profile }) {
   const [staffList, setStaffList] = useState([]);
@@ -824,7 +860,6 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
   useEffect(() => {
     if (!selectedStaff) return;
     
-    // 1. മാനുവൽ റേറ്റിംഗ് എടുക്കുന്നു
     supabase.from('appraisals').select('id, status, appraisal_ratings(domain_code, rating, comments)').eq('staff_id', selectedStaff).eq('cycle', '2026-2027').maybeSingle().then(({ data }) => {
       if (data) {
         setStatus(data.status || 'Draft');
@@ -836,17 +871,15 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
       } else { setStatus('Draft'); setRatings({}); setComments({}); }
     });
 
-    // 2. പെനാൽറ്റി കണക്കാക്കുന്നു
     const today = new Date().toISOString().split('T')[0];
     Promise.all([
       supabase.from('duty_records').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').lt('deadline', today),
-      supabase.from('special_tasks').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').lt('deadline', today)
+      supabase.from('special_tasks').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').neq('status', 'Proposed').lt('deadline', today)
     ]).then(([dutiesRes, tasksRes]) => {
       const overdueCount = (dutiesRes.data?.length || 0) + (tasksRes.data?.length || 0);
       setPenalty({ count: overdueCount, marks: overdueCount * 2 });
     });
 
-    // 3. പൂർത്തിയാക്കിയ ജോലികളുടെ ഓട്ടോ മാർക്കുകൾ കണക്കാക്കുന്നു (Domain-wise)
     Promise.all([
       supabase.from('duty_records').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed'),
       supabase.from('special_tasks').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed')
@@ -862,14 +895,12 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
 
   }, [selectedStaff]);
 
-  // ഓരോ ഡൊമെയ്നിന്റെയും അന്തിമ സ്കോർ കണക്കാക്കുന്നു (Max limit weight-il othungum)
   const calculateDomainTotal = (domainCode, weight) => {
     const manualScore = ((ratings[domainCode] || 0) / 5) * weight;
     const autoScore = autoMarks[domainCode] || 0;
     return Math.min(weight, manualScore + autoScore); 
   };
 
-  // ആകെ ഉള്ള സ്കോർ കണക്കാക്കുന്നു
   const grandTotal = domains.reduce((sum, d) => sum + calculateDomainTotal(d.code, d.weight), 0);
   const totalScore = Math.max(0, grandTotal - penalty.marks);
 
@@ -941,7 +972,6 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
                     <div style={{ fontSize: 13, color: '#64748b', marginTop: 5 }}>Max Weight: {d.weight} Marks</div>
                   </div>
                   
-                  {/* ഇവിടെയാണ് മാർക്ക് കൃത്യമായി കാണിക്കുന്നത് */}
                   <div style={{ textAlign: 'right', minWidth: 120, background: '#f8fafc', padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#64748b', marginBottom: 4 }}>
                       <span>Manual:</span> <span>{manualMark.toFixed(1)}</span>
@@ -1065,134 +1095,7 @@ function SpecialPointsPage() {
 }
 
 // ==========================================
-// 9. DEVELOPMENT PLAN
-// ==========================================
-function DevelopmentPlanPage({ userRole, profile }) {
-  const [staffList, setStaffList] = useState([]);
-  const [plans, setPlans] = useState([]);
-  const [selectedStaff, setSelectedStaff] = useState(userRole === 'teacher' ? profile?.id : '');
-  const [form, setForm] = useState({ priority: '', action: '', support: '', target_date: '' });
-  const [showForm, setShowForm] = useState(false);
-
-  const isReviewer = userRole === 'admin' || userRole === 'appraisal_authority';
-
-  useEffect(() => {
-    if (isReviewer) supabase.from('profiles').select('id, full_name').eq('active', true).then(({ data }) => setStaffList(data || []));
-  }, [isReviewer]);
-
-  useEffect(() => {
-    if (!selectedStaff) return;
-    supabase.from('development_plans').select('*').eq('staff_id', selectedStaff).order('created_at', { ascending: false }).then(({ data }) => setPlans(data || []));
-  }, [selectedStaff]);
-
-  async function handleAdd(e) {
-    e.preventDefault();
-    if (!form.priority || !form.action) return alert('Fill priority and action');
-    const { error } = await supabase.from('development_plans').insert({ staff_id: selectedStaff, priority: form.priority, action: form.action, support: form.support, target_date: form.target_date || null });
-    if (error) alert(error.message);
-    else {
-      alert('✅ Development Plan added!'); setForm({ priority: '', action: '', support: '', target_date: '' }); setShowForm(false);
-      supabase.from('development_plans').select('*').eq('staff_id', selectedStaff).order('created_at', { ascending: false }).then(({ data }) => setPlans(data || []));
-    }
-  }
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-        <h3>Development Plan</h3>
-        <div style={{ marginTop: 15 }}>
-          <label><b>Select Staff:</b> </label>
-          <select value={selectedStaff} onChange={e => setSelectedStaff(e.target.value)} disabled={userRole === 'teacher'} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minWidth: 200, marginLeft: 10, boxSizing: 'border-box' }}>
-            <option value="">-- Select Staff --</option>
-            {isReviewer ? staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>) : <option value={profile?.id}>{profile?.full_name}</option>}
-          </select>
-        </div>
-      </div>
-
-      {selectedStaff && (
-        <>
-          {isReviewer && (
-            <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-              <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}><Plus size={18} /> {showForm ? 'Cancel' : 'Add New Goal'}</button>
-              {showForm && (
-                <form onSubmit={handleAdd} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 15, marginTop: 20 }}>
-                  <label>Priority:<br/><input value={form.priority} onChange={e => setForm({...form, priority: e.target.value})} placeholder="e.g. High" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required /></label>
-                  <label>Target Date:<br/><input type="date" value={form.target_date} onChange={e => setForm({...form, target_date: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} /></label>
-                  <label style={{ gridColumn: '1 / -1' }}>Action Plan:<br/><input value={form.action} onChange={e => setForm({...form, action: e.target.value})} placeholder="What needs to be done?" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required /></label>
-                  <label style={{ gridColumn: '1 / -1' }}>Support Required:<br/><input value={form.support} onChange={e => setForm({...form, support: e.target.value})} placeholder="Training, resources, etc." style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} /></label>
-                  <button type="submit" style={{ gridColumn: '1 / -1', background: '#16a34a', color: '#fff', padding: 12, borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 'bold' }}>Save Goal</button>
-                </form>
-              )}
-            </div>
-          )}
-          <div style={{ background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #e2e8f0' }}>
-            <h3>Active Goals</h3>
-            {plans.length === 0 ? <p style={{ color: '#64748b' }}>No development plans found.</p> : (
-              <div className="table-responsive">
-                <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 500 }}>
-                  <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Priority</th><th style={{ padding: 12 }}>Action</th><th style={{ padding: 12 }}>Support</th><th style={{ padding: 12 }}>Target Date</th></tr></thead>
-                  <tbody>{plans.map(p => (<tr key={p.id} style={{ borderBottom: '1px solid #f1f5f9' }}><td style={{ padding: 12, fontWeight: 'bold', color: p.priority === 'High' ? '#ef4444' : '#2563eb' }}>{p.priority}</td><td style={{ padding: 12 }}>{p.action}</td><td style={{ padding: 12 }}>{p.support || '-'}</td><td style={{ padding: 12 }}>{p.target_date || 'TBD'}</td></tr>))}</tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-// ==========================================
-// 10. REPORTS
-// ==========================================
-function ReportsPage() {
-  const [report, setReport] = useState([]);
-  useEffect(() => {
-    async function generate() {
-      const { data: staff } = await supabase.from('profiles').select('id, full_name').eq('active', true);
-      const { data: appr } = await supabase.from('appraisals').select('staff_id, final_score').eq('status', 'Approved');
-      const { data: points } = await supabase.from('special_point_entries').select('staff_id, points_approved').eq('status', 'Approved');
-      const final = (staff || []).map(s => {
-        const baseScore = appr?.find(a => a.staff_id === s.id)?.final_score || 0;
-        const sp = points?.filter(p => p.staff_id === s.id).reduce((sum, curr) => sum + curr.points_approved, 0) || 0;
-        const combined = baseScore + sp;
-        return { ...s, baseScore: baseScore.toFixed(2), sp, finalScore: Math.min(100, combined).toFixed(2), extra: Math.max(0, combined - 100) };
-      });
-      setReport(final);
-    }
-    generate();
-  }, []);
-
-  function downloadCSV() {
-    if (report.length === 0) return alert("No data to export");
-    const headers = ['Staff Name', 'Appraisal Base', 'Special Points', 'Final Score (Max 100)', 'Extra Points'];
-    const rows = report.map(r => [r.full_name, r.baseScore, r.sp, r.finalScore, r.extra]);
-    let csvContent = "data:text/csv;charset=utf-8," + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement("a");
-    link.setAttribute("href", encodedUri);
-    link.setAttribute("download", "Staff_Appraisal_Report_2026-2027.csv");
-    document.body.appendChild(link); link.click(); document.body.removeChild(link);
-  }
-
-  return (
-    <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
-        <h3 style={{ margin: 0 }}>Final Appraisal Summary</h3>
-        <button onClick={downloadCSV} style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 'bold' }}><Download size={18} /> Export CSV</button>
-      </div>
-      <div className="table-responsive">
-        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 20, minWidth: 600 }}>
-          <thead><tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12, textAlign: 'left' }}>Staff</th><th style={{ padding: 12, textAlign: 'center' }}>Appraisal Base</th><th style={{ padding: 12, textAlign: 'center' }}>Special Points</th><th style={{ padding: 12, textAlign: 'center' }}>Final (100)</th><th style={{ padding: 12, textAlign: 'center' }}>Extra</th></tr></thead>
-          <tbody>{report.map(r => (<tr key={r.id} style={{ borderBottom: '1px solid #e2e8f0' }}><td style={{ padding: 12, fontWeight: 500 }}>{r.full_name}</td><td style={{ padding: 12, textAlign: 'center' }}>{r.baseScore}</td><td style={{ padding: 12, textAlign: 'center', color: '#2563eb' }}>+{r.sp}</td><td style={{ padding: 12, textAlign: 'center', fontWeight: 'bold', color: '#16a34a' }}>{r.finalScore}</td><td style={{ padding: 12, textAlign: 'center', fontWeight: 'bold', color: r.extra > 0 ? '#ea580c' : '#94a3b8' }}>{r.extra > 0 ? `+${r.extra} Extra` : '-'}</td></tr>))}</tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 11. ACCOUNT SETTINGS
+// 9. ACCOUNT SETTINGS
 // ==========================================
 function AccountSettingsPage({ profile }) {
   const [newEmail, setNewEmail] = useState('');
