@@ -931,7 +931,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
       )}
 
       {loading ? <Empty text="Loading..." /> : filtered.length === 0 ? <Empty text="No staff match these filters." /> : (
-        <Table heads={['Photo', 'Name & Email', 'Role', 'Department', 'Status', 'Actions']} min={800}>
+        <Table heads={['Photo', 'Name & Email', 'Role', 'Department', 'Status', 'Actions']} min={850}>
           {filtered.map(s => (
             <tr key={s.id} style={{ ...S.row, opacity: s.active === false ? 0.6 : 1 }}>
               <td style={S.td}>
@@ -953,8 +953,8 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
               </td>
               <td style={S.td}>{s.department || '-'}</td>
               <td style={S.td}><Badge text={s.active === false ? 'Inactive' : 'Active'} /></td>
-              <td style={S.td}>
-                <div style={{ display: 'flex', gap: 6 }}>
+              <td style={{ ...S.td, minWidth: 280 }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                   <button title="View profile" onClick={() => setView(s)} style={S.icon()}><Eye size={14} /></button>
                   {isAdmin && <button title="Edit" onClick={() => setEdit(s)} style={S.icon()}><Edit size={14} /></button>}
                   {isAdmin && <button title="Set password" onClick={() => setPwFor({ s, value: '', busy: false })} style={{ ...S.sm('#f59e0b'), display: 'inline-flex', alignItems: 'center', gap: 4 }}><KeyRound size={14} /> Password</button>}
