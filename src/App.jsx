@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   ArrowUpRight, Award, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, 
   FileCheck2, FileText, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, 
-  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Medal, Send, ThumbsUp
+  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Medal, Send, ThumbsUp, RotateCw
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -522,7 +522,7 @@ function StaffDirectoryPage({ currentUserRole }) {
 }
 
 // ==========================================
-// 5. DUTIES & MONITORING (Bulk & Auto Generate)
+// 5. DUTIES & MONITORING (True Weekly Logic)
 // ==========================================
 function DutyMonitoringPage({ userRole, profile }) {
   const [duties, setDuties] = useState([]);
@@ -530,6 +530,7 @@ function DutyMonitoringPage({ userRole, profile }) {
   const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 });
   const [showForm, setShowForm] = useState(false);
   const [assignToAll, setAssignToAll] = useState(false);
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     fetchDuties();
@@ -549,45 +550,60 @@ function DutyMonitoringPage({ userRole, profile }) {
     
     if (assignToAll) {
       const rows = staffList.map(s => ({ 
-        title: form.title, 
-        staff_id: s.id, 
-        deadline: form.deadline || null, 
-        status: 'Pending',
-        domain_code: form.domain_code,
-        marks: Number(form.marks)
+        title: form.title, staff_id: s.id, deadline: form.deadline || null, status: 'Pending',
+        domain_code: form.domain_code, marks: Number(form.marks)
       }));
       await supabase.from('duty_records').insert(rows);
     } else {
       await supabase.from('duty_records').insert({ 
-        title: form.title, 
-        staff_id: form.staff_id, 
-        deadline: form.deadline || null, 
-        status: 'Pending',
-        domain_code: form.domain_code,
-        marks: Number(form.marks)
+        title: form.title, staff_id: form.staff_id, deadline: form.deadline || null, status: 'Pending',
+        domain_code: form.domain_code, marks: Number(form.marks)
       });
     }
     
     alert('✅ Duty Assigned!'); 
     setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 }); 
-    setAssignToAll(false);
-    setShowForm(false); 
-    fetchDuties();
+    setAssignToAll(false); setShowForm(false); fetchDuties();
   }
 
-  async function generateStandardDuties() {
-    if (!window.confirm("This will assign a standard 'Weekly Prep/Dars Monitoring' (D3, 2 Marks) duty to ALL active staff. Continue?")) return;
+  async function generateWeeklyDuties() {
+    setGenerating(true);
+    const title = "Weekly Cleaning Check"; // നിങ്ങൾ ആവശ്യപ്പെട്ട ഡ്യൂട്ടി
+    
+    // ഈ ആഴ്ച ഡ്യൂട്ടി നേരത്തെ ഉണ്ടോ എന്ന് ചെക്ക് ചെയ്യുന്നു (അവസാന 7 ദിവസത്തിനുള്ളിൽ)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+    const { data: existing } = await supabase
+      .from('duty_records')
+      .select('id')
+      .eq('title', title)
+      .gte('created_at', sevenDaysAgo.toISOString());
+
+    if (existing && existing.length > 0) {
+      alert("⚠️ Weekly duties for this week have already been generated!");
+      setGenerating(false);
+      return;
+    }
+
+    // എല്ലാ സ്റ്റാഫിനും ഡ്യൂട്ടി ഉണ്ടാക്കുന്നു (D3, 2 Marks)
     const rows = staffList.map(s => ({ 
-      title: "Weekly Prep/Dars Monitoring", 
+      title: title, 
       staff_id: s.id, 
       deadline: null, 
       status: 'Pending',
-      domain_code: 'D3',
+      domain_code: 'D3', // Campus Engagement
       marks: 2
     }));
-    await supabase.from('duty_records').insert(rows);
-    alert('✅ Standard Duties Generated for all staff!');
-    fetchDuties();
+    
+    const { error } = await supabase.from('duty_records').insert(rows);
+    setGenerating(false);
+
+    if (error) alert(error.message);
+    else {
+      alert('✅ Weekly Cleaning Check Duties Generated for ALL staff!');
+      fetchDuties();
+    }
   }
 
   async function markDone(id) { await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', id); fetchDuties(); }
@@ -602,15 +618,15 @@ function DutyMonitoringPage({ userRole, profile }) {
             <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
               <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
             </button>
-            <button onClick={generateStandardDuties} style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <CalendarDays size={18} /> Auto-Generate Weekly Duties
+            <button onClick={generateWeeklyDuties} disabled={generating} style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <RotateCw size={18} /> {generating ? 'Generating...' : 'Auto-Generate Weekly Cleaning'}
             </button>
           </div>
           
           {showForm && (
             <form onSubmit={handleAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
               <label style={{ flex: '1 1 200px' }}>Duty Title:<br/>
-                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. CCE Exam Work" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Exam Duty" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
               
               <label style={{ flex: '1 1 200px' }}>
@@ -706,7 +722,6 @@ function SpecialTaskPage({ userRole, profile }) {
     setTasks(data || []);
   }
 
-  // അഡ്മിൻ ടാസ്ക് ക്രിയേറ്റ് ചെയ്യാൻ
   async function handleCreate(e) {
     e.preventDefault();
     if (!form.title || !form.staff_id) return alert('Fill all fields');
@@ -717,7 +732,6 @@ function SpecialTaskPage({ userRole, profile }) {
     alert('✅ Task Created!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
   }
 
-  // ടീച്ചർ ഒരു ആക്ടിവിറ്റി പ്രൊപ്പോസ് ചെയ്യാൻ (Marks/Domain ഇല്ലാതെ)
   async function handlePropose(e) {
     e.preventDefault();
     if (!form.title) return alert('Enter activity title');
@@ -727,7 +741,6 @@ function SpecialTaskPage({ userRole, profile }) {
     alert('✅ Proposal Submitted for Approval!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
   }
 
-  // അഡ്മിൻ പ്രൊപ്പോസൽ അപ്രൂവ് ചെയ്യാൻ
   async function approveProposal(task) {
     const domain = prompt("Enter Domain Code (D1 to D7):", "D7");
     if (!domain) return;
@@ -735,9 +748,7 @@ function SpecialTaskPage({ userRole, profile }) {
     if (!marks) return;
 
     const { error } = await supabase.from('special_tasks').update({ 
-      domain_code: domain, 
-      marks: Number(marks), 
-      status: 'Completed' 
+      domain_code: domain, marks: Number(marks), status: 'Completed' 
     }).eq('id', task.id);
     
     if (error) alert(error.message);
@@ -746,7 +757,6 @@ function SpecialTaskPage({ userRole, profile }) {
 
   async function markDone(id) { await supabase.from('special_tasks').update({ status: 'Completed' }).eq('id', id); fetchTasks(); }
   
-  const today = new Date().toISOString().split('T')[0];
   const isAdmin = userRole === 'admin' || userRole === 'coordinator' || userRole === 'appraisal_authority';
 
   return (
@@ -808,7 +818,6 @@ function SpecialTaskPage({ userRole, profile }) {
                     }}>{t.status}</span>
                   </td>
                   <td style={{ padding: 12 }}>
-                    {/* അഡ്മിൻ പ്രൊപ്പോസൽ അപ്രൂവ് ചെയ്യാൻ */}
                     {t.status === 'Proposed' && isAdmin && (
                       <button onClick={() => approveProposal(t)} style={{ padding: '6px 12px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
                         <ThumbsUp size={14} /> Approve & Assign
@@ -895,10 +904,11 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
 
   }, [selectedStaff]);
 
+  // ഇവിടെയാണ് വെയ്റ്റേജ് പ്രകാരമുള്ള കണക്കുകൂട്ടൽ നടക്കുന്നത്
   const calculateDomainTotal = (domainCode, weight) => {
     const manualScore = ((ratings[domainCode] || 0) / 5) * weight;
     const autoScore = autoMarks[domainCode] || 0;
-    return Math.min(weight, manualScore + autoScore); 
+    return Math.min(weight, manualScore + autoScore); // ഡൊമെയ്നിന്റെ പരമാവധി വെയ്റ്റിൽ കൂടുതൽ പോകില്ല
   };
 
   const grandTotal = domains.reduce((sum, d) => sum + calculateDomainTotal(d.code, d.weight), 0);
