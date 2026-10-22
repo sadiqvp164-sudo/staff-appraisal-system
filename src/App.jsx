@@ -124,24 +124,48 @@ function withBonus(wm, entries) {
 //  - a domain can never exceed its own weight (so bonus in D7 cannot push it above 10)
 function computeScores(ratings, work) {
   const subs = {}; const per = {}; let sum = 0, max = 0;
+  
   domains.forEach(d => {
     let dEarn = 0, dExcluded = 0;
+    
     d.subs.forEach(s => {
       const r = ratings[s.code]; const wk = work[s.code];
       const rp = r >= 1 ? r / 5 : null;
-      const wp = wk && wk.assigned > 0 ? wk.earned / wk.assigned : null;
+      
+      let wp = null;
+      if (wk) {
+        // ---- പുതിയ ലോജിക്: CCE-യിൽ (T5) 4 ജോലികൾ എന്നത് ടാർഗെറ്റ് ആക്കുന്നു ----
+        if (s.code === 'T5') { 
+          const CCE_TARGET = 4; 
+          if (wk.earned > 0) {
+            wp = Math.min(1, wk.earned / CCE_TARGET); // പരമാവധി 100% (1) വരെ മാത്രം
+          } else if (wk.assigned > 0) {
+            wp = 0; 
+          }
+        } 
+        // ---- മറ്റ് സബ്-ഡൊമെയ്നുകൾക്ക് പഴയ ലോജിക് തന്നെ ----
+        else {
+          if (wk.assigned > 0) {
+            wp = wk.earned / wk.assigned;
+          }
+        }
+      }
+
       if (r === 0 && wp === null) {
         subs[s.code] = { na: true, score: 0, rp, wp };
         dExcluded += s.weight;
         return;
       }
+      
       let pct = 0;
       if (rp !== null && wp !== null) pct = WORK_SHARE * wp + (1 - WORK_SHARE) * rp;
       else if (wp !== null) pct = wp;
       else if (rp !== null) pct = rp;
+      
       subs[s.code] = { na: false, score: pct * s.weight, pct, rp, wp };
       dEarn += pct * s.weight;
     });
+    
     const dMax = Math.max(0, d.weight - dExcluded);
     if (!dMax) per[d.code] = { na: true, score: 0, max: 0 };
     else {
