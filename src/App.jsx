@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   ArrowUpRight, Award, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, 
   FileCheck2, FileText, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, 
-  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Medal, Send, ThumbsUp
+  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Send, ThumbsUp
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -16,6 +16,7 @@ const domains = [
   { code: 'D7', name: 'Academic Leadership & Governance', weight: 10, color: '#4f46e5' }
 ];
 
+// Unwanted tabs & Special Points removed
 const nav = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
   { id: 'scores', label: 'Staff Leaderboard', icon: Award, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
@@ -23,7 +24,6 @@ const nav = [
   { id: 'duties', label: 'Duty & Monitoring', icon: CalendarDays, roles: ['admin', 'coordinator', 'teacher'] },
   { id: 'tasks', label: 'Special Task & Proposals', icon: ClipboardList, roles: ['admin', 'coordinator', 'teacher'] },
   { id: 'appraisal', label: 'Seven-Domain Appraisal', icon: GraduationCap, roles: ['admin', 'teacher', 'appraisal_authority', 'coordinator'] },
-  { id: 'points', label: 'Special Points', icon: Award, roles: ['admin', 'appraisal_authority'] },
   { id: 'settings', label: 'My Account', icon: Settings, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] }
 ];
 
@@ -156,7 +156,6 @@ function App() {
           {active === 'duties' && <DutyMonitoringPage userRole={userRole} profile={profile} />}
           {active === 'tasks' && <SpecialTaskPage userRole={userRole} profile={profile} />}
           {active === 'appraisal' && <SevenDomainAppraisalPage userRole={userRole} profile={profile} />}
-          {active === 'points' && <SpecialPointsPage />}
           {active === 'settings' && <AccountSettingsPage profile={profile} />}
         </main>
       </div>
@@ -233,7 +232,7 @@ function DashboardPage() {
 }
 
 // ==========================================
-// 3. STAFF LEADERBOARD (With CSV Export)
+// 3. STAFF LEADERBOARD
 // ==========================================
 function AllStaffScoresPage() {
   const [data, setData] = useState([]);
@@ -522,12 +521,12 @@ function StaffDirectoryPage({ currentUserRole }) {
 }
 
 // ==========================================
-// 5. DUTIES & MONITORING (Manual Assign with Domain & Marks)
+// 5. DUTIES & MONITORING (Recurring & Delete Added)
 // ==========================================
 function DutyMonitoringPage({ userRole, profile }) {
   const [duties, setDuties] = useState([]);
   const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5 });
+  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5, is_recurring: false });
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
@@ -552,16 +551,47 @@ function DutyMonitoringPage({ userRole, profile }) {
       deadline: form.deadline || null, 
       status: 'Pending',
       domain_code: form.domain_code,
-      marks: Number(form.marks)
+      marks: Number(form.marks),
+      is_recurring: form.is_recurring
     });
     
     alert('✅ Duty Assigned!'); 
-    setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5 }); 
+    setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5, is_recurring: false }); 
     setShowForm(false); 
     fetchDuties();
   }
 
-  async function markDone(id) { await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', id); fetchDuties(); }
+  async function markDone(duty) {
+    // Mark as completed
+    await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', duty.id);
+
+    // If it is a recurring duty, auto-generate next week's duty
+    if (duty.is_recurring) {
+      const nextWeekDate = new Date();
+      nextWeekDate.setDate(nextWeekDate.getDate() + 7);
+      
+      await supabase.from('duty_records').insert({
+        title: duty.title,
+        staff_id: duty.staff_id,
+        domain_code: duty.domain_code,
+        marks: duty.marks,
+        is_recurring: true,
+        status: 'Pending',
+        deadline: nextWeekDate.toISOString().split('T')[0]
+      });
+      alert('✅ Duty Completed! Next week\'s recurring duty automatically generated.');
+    } else {
+      alert('✅ Duty Completed!');
+    }
+    fetchDuties();
+  }
+
+  async function deleteDuty(id) {
+    if (userRole !== 'admin') return alert('Only admins can delete duties.');
+    if (!window.confirm("Are you sure you want to delete this duty record?")) return;
+    await supabase.from('duty_records').delete().eq('id', id);
+    fetchDuties();
+  }
   
   const today = new Date().toISOString().split('T')[0];
 
@@ -598,6 +628,11 @@ function DutyMonitoringPage({ userRole, profile }) {
               <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
                 <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
               </label>
+
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, height: 42, flex: '0 0 auto', background: '#f1f5f9', padding: '0 15px', borderRadius: 8, border: '1px solid #cbd5e1', cursor: 'pointer' }}>
+                <input type="checkbox" checked={form.is_recurring} onChange={e => setForm({...form, is_recurring: e.target.checked})} />
+                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#475569' }}>Recurring Weekly</span>
+              </label>
               
               <button type="submit" style={{ background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>Save</button>
             </form>
@@ -617,7 +652,7 @@ function DutyMonitoringPage({ userRole, profile }) {
                   <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9', background: isOverdue ? '#fef2f2' : 'transparent' }}>
                     <td style={{ padding: 12 }}>{d.profiles?.full_name}</td>
                     <td style={{ padding: 12 }}>
-                      <b>{d.title}</b><br/>
+                      <b>{d.title}</b> {d.is_recurring && <span style={{fontSize: 10, background: '#e0e7ff', color: '#3730a3', padding: '2px 6px', borderRadius: 10, marginLeft: 5}}>Recurring</span>}<br/>
                       <span style={{fontSize: 11, color: '#64748b'}}>{d.domain_code || 'No Domain'} (+{d.marks || 0} Marks)</span>
                     </td>
                     <td style={{ padding: 12, color: isOverdue ? '#ef4444' : 'inherit', fontWeight: isOverdue ? 'bold' : 'normal' }}>
@@ -626,9 +661,9 @@ function DutyMonitoringPage({ userRole, profile }) {
                     <td style={{ padding: 12 }}>
                       <span style={{ padding: '4px 8px', borderRadius: 12, background: d.status === 'Completed' ? '#dcfce7' : '#fef3c7', color: d.status === 'Completed' ? '#166534' : '#92400e', fontSize: 12 }}>{d.status}</span>
                     </td>
-                    <td style={{ padding: 12 }}>
+                    <td style={{ padding: 12, display: 'flex', gap: 8 }}>
                       {d.status !== 'Completed' && (
-                        <button onClick={() => markDone(d.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <button onClick={() => markDone(d)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
                           <Check size={14} /> Mark Done
                         </button>
                       )}
@@ -636,6 +671,11 @@ function DutyMonitoringPage({ userRole, profile }) {
                         <span style={{ color: '#16a34a', fontSize: 12, fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: 5 }}>
                           <CheckCircle2 size={16} /> Completed
                         </span>
+                      )}
+                      {userRole === 'admin' && (
+                        <button onClick={() => deleteDuty(d.id)} style={{ padding: '6px', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: 6, cursor: 'pointer' }} title="Delete Duty">
+                          <Trash2 size={16} />
+                        </button>
                       )}
                     </td>
                   </tr>
@@ -794,7 +834,7 @@ function SpecialTaskPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 7. SEVEN DOMAIN APPRAISAL (Auto-Marks)
+// 7. SEVEN DOMAIN APPRAISAL
 // ==========================================
 function SevenDomainAppraisalPage({ userRole, profile }) {
   const [staffList, setStaffList] = useState([]);
@@ -978,81 +1018,7 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 8. SPECIAL POINTS
-// ==========================================
-function SpecialPointsPage() {
-  const [staffList, setStaffList] = useState([]);
-  const [pointsList, setPointsList] = useState([]);
-  const [form, setForm] = useState({ staff_id: '', points: '', reason: '' });
-  const [refresh, setRefresh] = useState(0);
-
-  useEffect(() => {
-    supabase.from('profiles').select('id, full_name').eq('active', true).then(({ data }) => setStaffList(data || []));
-    supabase.from('special_point_entries').select('*, profiles(full_name)').order('created_at', { ascending: false }).then(({ data }) => setPointsList(data || []));
-  }, [refresh]);
-
-  async function submit(e) {
-    e.preventDefault();
-    if (!form.staff_id || !form.points) return;
-    await supabase.from('special_point_entries').insert({ staff_id: form.staff_id, points_proposed: form.points, reason: form.reason, status: 'Approved', points_approved: form.points });
-    alert('Points Added!'); setForm({ staff_id: '', points: '', reason: '' }); setRefresh(prev => prev + 1);
-  }
-
-  async function deletePoint(id) {
-    if (!window.confirm("Are you sure you want to delete this point record?")) return;
-    const { error } = await supabase.from('special_point_entries').delete().eq('id', id);
-    if (error) alert(error.message);
-    else setRefresh(prev => prev + 1);
-  }
-
-  async function editPoint(p) {
-    const newPoints = prompt("Enter new points:", p.points_approved);
-    if (newPoints === null) return;
-    const newReason = prompt("Enter new reason:", p.reason);
-    if (newReason === null) return;
-    
-    const { error } = await supabase.from('special_point_entries')
-      .update({ points_approved: parseInt(newPoints), points_proposed: parseInt(newPoints), reason: newReason })
-      .eq('id', p.id);
-      
-    if (error) alert(error.message);
-    else setRefresh(prev => prev + 1);
-  }
-
-  return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-        <h3>Award Points</h3>
-        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
-          <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', width: '100%', boxSizing: 'border-box' }} required><option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>
-          <input type="number" placeholder="Points" value={form.points} onChange={e => setForm({...form, points: e.target.value})} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', width: '100%', boxSizing: 'border-box' }} required />
-          <textarea placeholder="Reason" value={form.reason} onChange={e => setForm({...form, reason: e.target.value})} style={{ padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', width: '100%', boxSizing: 'border-box', minHeight: 80 }} required />
-          <button type="submit" style={{ background: '#2563eb', color: '#fff', padding: 10, borderRadius: 8, border: 'none', cursor: 'pointer' }}>Add Points</button>
-        </form>
-      </div>
-      <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-        <h3>Recent Points</h3>
-        <ul style={{ listStyle: 'none', padding: 0 }}>
-          {pointsList.map(p => (
-            <li key={p.id} style={{ padding: 15, borderBottom: '1px solid #f1f5f9', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <div>
-                <b>{p.profiles?.full_name}</b> <span style={{ color: 'green', fontWeight: 'bold', marginLeft: 5 }}>+{p.points_approved}</span>
-                <div style={{ fontSize: 13, color: '#64748b', marginTop: 5 }}>{p.reason}</div>
-              </div>
-              <div style={{ display: 'flex', gap: 5 }}>
-                <button onClick={() => editPoint(p)} style={{ background: '#e0e7ff', color: '#3730a3', border: 'none', padding: 6, borderRadius: 6, cursor: 'pointer' }} title="Edit"><Edit size={14} /></button>
-                <button onClick={() => deletePoint(p.id)} style={{ background: '#fee2e2', color: '#991b1b', border: 'none', padding: 6, borderRadius: 6, cursor: 'pointer' }} title="Delete"><Trash2 size={14} /></button>
-              </div>
-            </li>
-          ))}
-        </ul>
-      </div>
-    </div>
-  );
-}
-
-// ==========================================
-// 9. ACCOUNT SETTINGS
+// 8. ACCOUNT SETTINGS
 // ==========================================
 function AccountSettingsPage({ profile }) {
   const [newEmail, setNewEmail] = useState('');
