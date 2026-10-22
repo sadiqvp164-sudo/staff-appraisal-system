@@ -86,7 +86,7 @@ function downloadCSV(filename, headers, rows) {
 function workMap(items, today = todayStr()) {
   const m = {};
   items.forEach(i => {
-    if (!i.sub_code || i.status === 'Submitted') return; 
+    if (!i.sub_code || i.status === 'Submitted') return;
     const done = i.status === 'Completed';
     const pastDue = i.due_date && i.due_date < today;
     if (!done && !pastDue) return;
@@ -106,7 +106,7 @@ function withBonus(wm, entries) {
     if (pts <= 0) return;
 
     if (!newWm[sub]) newWm[sub] = { assigned: BONUS_CAP, earned: 0, n: 0, done: 0, bonus: 0 };
-    
+
     newWm[sub].assigned = Math.max(newWm[sub].assigned, BONUS_CAP);
     newWm[sub].earned = Math.min(newWm[sub].assigned, newWm[sub].earned + pts);
     newWm[sub].bonus = (newWm[sub].bonus || 0) + pts;
@@ -116,56 +116,76 @@ function withBonus(wm, entries) {
   return newWm;
 }
 
+// Marks are taken straight from the sub-domain WEIGHT (out of 100 in total).
+//  - sub-domain mark = % x weight   (% = work %, rating %, or 50/50 if both exist)
+//  - sub-domain with no rating and no work = 0 marks (it is NOT removed)
+//  - only a sub-domain rated "N/A" by the Principal (and with no work) is excluded
+//    and its weight is taken out of the maximum
+//  - a domain can never exceed its own weight (so bonus in D7 cannot push it above 10)
 function computeScores(ratings, work) {
-  const subs = {}; const per = {}; let sum = 0, w = 0;
+  const subs = {}; const per = {}; let sum = 0, max = 0;
   domains.forEach(d => {
-    let dEarn = 0, dW = 0;
+    let dEarn = 0, dExcluded = 0;
     d.subs.forEach(s => {
       const r = ratings[s.code]; const wk = work[s.code];
       const rp = r >= 1 ? r / 5 : null;
       const wp = wk && wk.assigned > 0 ? wk.earned / wk.assigned : null;
-      let pct = null;
+      if (r === 0 && wp === null) {
+        subs[s.code] = { na: true, score: 0, rp, wp };
+        dExcluded += s.weight;
+        return;
+      }
+      let pct = 0;
       if (rp !== null && wp !== null) pct = WORK_SHARE * wp + (1 - WORK_SHARE) * rp;
-      else if (wp !== null) pct = wp; else if (rp !== null) pct = rp;
-      if (pct === null) subs[s.code] = { na: true, score: 0, rp, wp };
-      else { subs[s.code] = { na: false, score: pct * s.weight, pct, rp, wp }; dEarn += pct * s.weight; dW += s.weight; }
+      else if (wp !== null) pct = wp;
+      else if (rp !== null) pct = rp;
+      subs[s.code] = { na: false, score: pct * s.weight, pct, rp, wp };
+      dEarn += pct * s.weight;
     });
-    if (!dW) per[d.code] = { na: true, score: 0 };
-    else { const sc = (dEarn / dW) * d.weight; per[d.code] = { na: false, score: sc }; sum += sc; w += d.weight; }
+    const dMax = Math.max(0, d.weight - dExcluded);
+    if (!dMax) per[d.code] = { na: true, score: 0, max: 0 };
+    else {
+      const sc = Math.min(dMax, dEarn);
+      per[d.code] = { na: false, score: sc, max: dMax };
+      sum += sc; max += dMax;
+    }
   });
-  return { subs, per, total: w ? Math.min(100, (sum / w) * 100) : 0 };
+  return { subs, per, total: max ? Math.min(100, (sum / max) * 100) : 0 };
 }
 
-const S = {
-  card: { background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' },
-  input: { padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', boxSizing: 'border-box', fontFamily: 'inherit', fontSize: 14 },
-  th: { padding: 12, textAlign: 'left', fontSize: 13, color: '#475569' },
-  td: { padding: 12, fontSize: 14, verticalAlign: 'middle' },
-  btn: (bg, extra = {}) => ({ background: bg, color: '#fff', padding: '8px 16px', borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, ...extra }),
-  sm: (bg) => ({ background: bg, color: '#fff', border: 'none', padding: '6px 10px', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 }),
-  icon: (c = '#475569') => ({ background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, padding: 6, cursor: 'pointer', color: c, display: 'inline-flex' }),
-  row: { borderBottom: '1px solid #f1f5f9' }
-};
-
-const TONES = { green: ['#dcfce7', '#166534'], amber: ['#fef3c7', '#92400e'], red: ['#fee2e2', '#991b1b'], blue: ['#e0e7ff', '#3730a3'], purple: ['#fae8ff', '#86198f'], gray: ['#f1f5f9', '#475569'] };
-const STATUS_TONE = {
-  Pending: 'amber', Submitted: 'blue', Completed: 'green', Approved: 'green', Rejected: 'red', Returned: 'red',
-  Draft: 'gray', Coordinator_Reviewed: 'purple', Active: 'green', Inactive: 'red', Overdue: 'red', Late: 'amber'
-};
-
 // ==========================================
-// SHARED UI
+// UI CORE: context, styles, modal
 // ==========================================
 const UIContext = createContext(null);
 const useUI = () => useContext(UIContext);
 
-function Modal({ title, onClose, children, width = 500 }) {
+const TONES = {
+  gray: ['#f1f5f9', '#475569'], green: ['#dcfce7', '#166534'], amber: ['#fef3c7', '#92400e'],
+  red: ['#fee2e2', '#991b1b'], blue: ['#dbeafe', '#1e40af'], purple: ['#ede9fe', '#5b21b6']
+};
+const STATUS_TONE = {
+  Pending: 'amber', Submitted: 'purple', Completed: 'green', Approved: 'green', Draft: 'blue',
+  Rejected: 'red', Returned: 'red', Overdue: 'red', Late: 'amber', Active: 'green', Inactive: 'gray'
+};
+
+const S = {
+  card: { background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0', boxShadow: '0 1px 2px rgba(0,0,0,0.04)' },
+  input: { padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', fontSize: 14, background: '#fff', boxSizing: 'border-box', fontFamily: 'inherit' },
+  th: { textAlign: 'left', padding: '10px 12px', fontSize: 12, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 },
+  td: { padding: '12px', fontSize: 14, verticalAlign: 'top' },
+  row: { borderBottom: '1px solid #f1f5f9' },
+  btn: (bg, extra = {}) => ({ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '10px 16px', borderRadius: 8, border: 'none', background: bg, color: '#fff', fontWeight: 600, fontSize: 14, cursor: 'pointer', ...extra }),
+  sm: (bg) => ({ padding: '6px 12px', borderRadius: 6, border: 'none', background: bg, color: '#fff', fontWeight: 600, fontSize: 12, cursor: 'pointer' }),
+  icon: (c = '#475569') => ({ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', padding: 7, borderRadius: 6, border: '1px solid #e2e8f0', background: '#fff', color: c, cursor: 'pointer' })
+};
+
+function Modal({ title, onClose, width = 520, children }) {
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
-      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', padding: 26, borderRadius: 16, width: '100%', maxWidth: width, maxHeight: '90vh', overflowY: 'auto' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 16 }}>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, zIndex: 1000 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', borderRadius: 14, padding: 24, width: '100%', maxWidth: width, maxHeight: '90vh', overflowY: 'auto', boxSizing: 'border-box' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 16 }}>
           <h3 style={{ margin: 0, fontSize: 18 }}>{title}</h3>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer' }}><X size={20} /></button>
+          <button type="button" onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#64748b' }}><X size={20} /></button>
         </div>
         {children}
       </div>
@@ -697,8 +717,6 @@ function PodiumCard({ p, place }) {
   );
 }
 
-// Replace your whole `function LeaderboardPage({ profile }) { ... }` with this one.
-// (PodiumCard stays as it is.)
 function LeaderboardPage({ profile }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1719,7 +1737,7 @@ function AppraisalPage({ userRole, profile }) {
   const isRater = userRole === 'admin' || (userRole === 'appraisal_authority' && !isSelf);
   const locked = status === 'Approved';
   const canRate = isRater && !locked;
-  const hideDraft = !isRater && !locked; 
+  const hideDraft = !isRater && !locked;
 
   useEffect(() => {
     if (!selected) return;
@@ -1764,7 +1782,7 @@ function AppraisalPage({ userRole, profile }) {
 
   async function finalize() {
     const empty = SUBS.filter(s => ratings[s.code] === undefined && !wm[s.code]).length;
-    if (!(await confirm(`Finalise and lock this appraisal? ${empty ? `${empty} sub-domain(s) have no rating and no work, so they are treated as not applicable. ` : ''}The score will be locked.`))) return;
+    if (!(await confirm(`Finalise and lock this appraisal? ${empty ? `${empty} sub-domain(s) have no rating and no work, so they score 0. ` : ''}The score will be locked.`))) return;
     persist('Approved', 'Appraisal finalised');
   }
   async function reopen() {
@@ -1838,7 +1856,7 @@ function AppraisalPage({ userRole, profile }) {
               {isRater
                 ? <><b>How marks are calculated.</b> The Principal/Admin gives a rating (1–5, or N/A) to each sub-domain. Work done by the staff member (CCE, midterm, lesson plans, duties, tasks, bonus) is added automatically.
                     If a sub-domain has both, they are averaged ({Math.round(WORK_SHARE * 100)}% work / {Math.round((1 - WORK_SHARE) * 100)}% rating); if only one exists, that one is used.
-                    A sub-domain or domain with neither (or rated N/A) is <b>excluded</b> and the total is re-scaled to 100, so staff are not penalised for areas that do not apply to them.</>
+                    A sub-domain with neither rating nor work scores <b>0</b>. Only a sub-domain rated <b>N/A</b> is excluded (its weight is removed from the 100).</>
                 : <>Your appraisal is evaluated by the Principal/Admin. Work you complete (CCE, midterm, lesson plans, duties, tasks, bonus) is counted automatically. Ratings and remarks appear here once the appraisal is finalised.</>}
             </div>
 
@@ -1853,7 +1871,7 @@ function AppraisalPage({ userRole, profile }) {
                       <div style={{ fontSize: 13, color: '#64748b', marginTop: 5 }}>Max Weight: {d.weight} Marks • {d.subs.length} sub-domains {isOpen ? '▲' : '▼'}</div>
                     </div>
                     <div style={{ textAlign: 'right', fontWeight: 'bold', fontSize: 18, color: pd.na ? '#94a3b8' : d.color }}>
-                      {pd.na ? 'N/A (excluded)' : `${pd.score.toFixed(1)} / ${d.weight}`}
+                      {pd.na ? 'N/A (excluded)' : `${pd.score.toFixed(1)} / ${pd.max}`}
                     </div>
                   </div>
 
@@ -1999,7 +2017,7 @@ function ReportsPage() {
             ))}
           </Table>
         )}
-        <div style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>Live calculation from the Principal's ratings and approved work. N/A = domain not applicable (excluded, total re-scaled to 100). Final locked scores are on the leaderboard.</div>
+        <div style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>Live calculation from the Principal's ratings and approved work. N/A = every sub-domain in that domain was rated N/A (excluded from the 100). Final locked scores are on the leaderboard.</div>
       </div>
 
       <div style={S.card}>
