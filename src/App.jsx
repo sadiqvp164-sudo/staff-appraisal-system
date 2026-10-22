@@ -116,15 +116,11 @@ function withBonus(wm, entries) {
   return newWm;
 }
 
-// Marks are taken straight from the sub-domain WEIGHT (out of 100 in total).
-//  - sub-domain mark = % x weight   (% = work %, rating %, or 50/50 if both exist)
-//  - sub-domain with no rating and no work = 0 marks (it is NOT removed)
-//  - only a sub-domain rated "N/A" by the Principal (and with no work) is excluded
-//    and its weight is taken out of the maximum
-//  - a domain can never exceed its own weight (so bonus in D7 cannot push it above 10)
+// Marks calculation with extra points for over-performing
 function computeScores(ratings, work) {
   const subs = {}; const per = {}; let sum = 0, max = 0;
-  
+  let totalExtraPoints = 0; // അധിക പോയിന്റുകൾ കണക്കാക്കാൻ
+
   domains.forEach(d => {
     let dEarn = 0, dExcluded = 0;
     
@@ -133,26 +129,28 @@ function computeScores(ratings, work) {
       const rp = r >= 1 ? r / 5 : null;
       
       let wp = null;
-      if (wk) {
-        // ---- പുതിയ ലോജിക്: CCE-യിൽ (T5) 4 ജോലികൾ എന്നത് ടാർഗെറ്റ് ആക്കുന്നു ----
-        if (s.code === 'T5') { 
-          const CCE_TARGET = 4; 
-          if (wk.earned > 0) {
-            wp = Math.min(1, wk.earned / CCE_TARGET); // പരമാവധി 100% (1) വരെ മാത്രം
-          } else if (wk.assigned > 0) {
-            wp = 0; 
-          }
-        } 
-        // ---- മറ്റ് സബ്-ഡൊമെയ്നുകൾക്ക് പഴയ ലോജിക് തന്നെ ----
-        else {
-          if (wk.assigned > 0) {
-            wp = wk.earned / wk.assigned;
-          }
+      let extraPoints = 0;
+
+      if (wk && wk.assigned > 0) {
+        // ബേസ് മാർക്ക് (പരമാവധി 100% അല്ലെങ്കിൽ 1)
+        wp = Math.min(1, wk.earned / wk.assigned);
+        
+        // ---- പുതിയ ലോജിക്: Extra Points ----
+        // അസൈൻ ചെയ്തതിൽ കൂടുതൽ ചെയ്താൽ ഓരോ ജോലിക്കും 2 പോയിന്റ് വീതം നൽകുന്നു.
+        if (wk.earned > wk.assigned) {
+          const extraWorks = wk.earned - wk.assigned;
+          extraPoints = extraWorks * 2; // 1 extra work = 2 points
+          totalExtraPoints += extraPoints;
         }
+      } else if (wk && wk.earned > 0) {
+        // അസൈൻ ചെയ്യാതെ ചെയ്യുന്ന ജോലികൾ
+        wp = 1; 
+        extraPoints = wk.earned * 2;
+        totalExtraPoints += extraPoints;
       }
 
       if (r === 0 && wp === null) {
-        subs[s.code] = { na: true, score: 0, rp, wp };
+        subs[s.code] = { na: true, score: 0, rp, wp, extraPoints: 0 };
         dExcluded += s.weight;
         return;
       }
@@ -162,7 +160,7 @@ function computeScores(ratings, work) {
       else if (wp !== null) pct = wp;
       else if (rp !== null) pct = rp;
       
-      subs[s.code] = { na: false, score: pct * s.weight, pct, rp, wp };
+      subs[s.code] = { na: false, score: pct * s.weight, pct, rp, wp, extraPoints };
       dEarn += pct * s.weight;
     });
     
@@ -174,7 +172,11 @@ function computeScores(ratings, work) {
       sum += sc; max += dMax;
     }
   });
-  return { subs, per, total: max ? Math.min(100, (sum / max) * 100) : 0 };
+
+  const baseScore = max ? (sum / max) * 100 : 0;
+  const finalTotal = Math.min(100, baseScore + totalExtraPoints); 
+
+  return { subs, per, total: finalTotal, baseScore, totalExtraPoints };
 }
 
 // ==========================================
@@ -720,16 +722,16 @@ function AnnouncementsPage({ userRole, profile }) {
 }
 
 // ==========================================
-// LEADERBOARD
+// LEADERBOARD & SCORE BREAKDOWN
 // ==========================================
-function PodiumCard({ p, place }) {
+function PodiumCard({ p, place, onClick }) {
   const c = {
     1: { cls: 'podium-1st', bg: '#fffbeb', bd: '#f59e0b', pad: 30, w: 260, img: 110, medal: '🥇', label: '1st Place', name: 18, score: 32, tr: 'translateY(-20px)', tc: '#d97706', bw: 3 },
     2: { cls: 'podium-2nd', bg: '#fff', bd: '#cbd5e1', pad: 20, w: 220, img: 80, medal: '🥈', label: '2nd Place', name: 16, score: 24, tr: 'none', tc: '#64748b', bw: 2 },
     3: { cls: 'podium-3rd', bg: '#fff', bd: '#b45309', pad: 20, w: 220, img: 80, medal: '🥉', label: '3rd Place', name: 16, score: 24, tr: 'none', tc: '#b45309', bw: 2 }
   }[place];
   return (
-    <div className={c.cls} style={{ background: c.bg, padding: c.pad, borderRadius: 16, border: `${c.bw}px solid ${c.bd}`, width: c.w, textAlign: 'center', transform: c.tr, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.08)' }}>
+    <div onClick={onClick} className={c.cls} style={{ background: c.bg, padding: c.pad, borderRadius: 16, border: `${c.bw}px solid ${c.bd}`, width: c.w, textAlign: 'center', transform: c.tr, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.08)', cursor: 'pointer' }}>
       <div style={{ width: c.img, height: c.img, margin: '0 auto 15px', borderRadius: '50%', border: `4px solid ${c.bd}`, overflow: 'hidden', background: '#f1f5f9', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: c.img * 0.4 }}>
         {p.avatar_url ? <img src={p.avatar_url} alt={c.label} style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : p.full_name.charAt(0)}
       </div>
@@ -741,12 +743,54 @@ function PodiumCard({ p, place }) {
   );
 }
 
+function ScoreBreakdownModal({ staff, onClose }) {
+  const { breakdown } = staff;
+  if (!breakdown) return null;
+
+  return (
+    <Modal title={`Score Breakdown: ${staff.full_name}`} onClose={onClose} width={700}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 15, marginBottom: 20 }}>
+        <div style={{ padding: 15, background: '#f8fafc', borderRadius: 8, textAlign: 'center', border: '1px solid #e2e8f0' }}>
+          <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Base Score</div>
+          <div style={{ fontSize: 24, fontWeight: 'bold', color: '#475569' }}>{breakdown.baseScore?.toFixed(2) || '0.00'} <span style={{fontSize: 14, color:'#94a3b8'}}>/ 100</span></div>
+        </div>
+        <div style={{ padding: 15, background: '#ecfdf5', borderRadius: 8, textAlign: 'center', border: '1px solid #a7f3d0' }}>
+          <div style={{ fontSize: 12, color: '#047857', textTransform: 'uppercase', fontWeight: 600 }}>Extra Points</div>
+          <div style={{ fontSize: 24, fontWeight: 'bold', color: '#059669' }}>+{breakdown.totalExtraPoints?.toFixed(2) || '0.00'}</div>
+        </div>
+        <div style={{ padding: 15, background: '#eff6ff', borderRadius: 8, textAlign: 'center', border: '1px solid #bfdbfe' }}>
+          <div style={{ fontSize: 12, color: '#1d4ed8', textTransform: 'uppercase', fontWeight: 600 }}>Total Score</div>
+          <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2563eb' }}>{staff.officialScore.toFixed(2)}</div>
+        </div>
+      </div>
+
+      <h4 style={{ marginTop: 0, marginBottom: 10, color: '#1e293b' }}>Domain Details</h4>
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
+        {domains.map(d => {
+          const pd = breakdown.per[d.code] || { na: true, score: 0, max: d.weight };
+          return (
+            <div key={d.code} style={{ padding: '12px 15px', borderBottom: '1px solid #e2e8f0', background: '#fff' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: 14 }}>
+                <span><span style={{ color: d.color }}>{d.code}</span> - {d.name}</span>
+                <span style={{ color: pd.na ? '#94a3b8' : d.color }}>
+                  {pd.na ? 'N/A' : `${pd.score.toFixed(1)} / ${pd.max}`}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </Modal>
+  );
+}
+
 function LeaderboardPage({ profile }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [needsSql, setNeedsSql] = useState(false);
   const [q, setQ] = useState('');
   const [dept, setDept] = useState('all');
+  const [selectedStaff, setSelectedStaff] = useState(null); // സ്കോർ ബ്രേക്ക്ഡൗൺ കാണിക്കാൻ
   const rater = profile.role === 'admin' || profile.role === 'appraisal_authority';
 
   const load = useCallback(async () => {
@@ -772,11 +816,18 @@ function LeaderboardPage({ profile }) {
       const rm = {}; let hasRatings = false;
       (a?.appraisal_sub_ratings || []).forEach(r => { if (r.rating !== null && r.rating !== undefined) { rm[r.sub_code] = r.rating; hasRatings = true; } });
       const wm = withBonus(wmBy[s.id] || {}, bonusBy[s.id] || []);
-      let officialScore = 0;
-      if (a?.status === 'Approved' && !hasRatings) officialScore = Number(a.final_score) || 0; // ratings not readable -> use locked score
-      else if (hasRatings || Object.keys(wm).length) officialScore = computeScores(rm, wm).total;
-      officialScore = Math.min(100, officialScore);
-      return { ...s, officialScore, bonus: 0, totalEarned: officialScore, finalised: a?.status === 'Approved' };
+      
+      let computedData = { total: 0, baseScore: 0, totalExtraPoints: 0, per: {}, subs: {} };
+      if (a?.status === 'Approved' && !hasRatings) {
+         computedData.total = Number(a.final_score) || 0;
+         computedData.baseScore = computedData.total;
+      } else if (hasRatings || Object.keys(wm).length) {
+         computedData = computeScores(rm, wm);
+      }
+      
+      let officialScore = Math.min(100, computedData.total);
+      
+      return { ...s, officialScore, breakdown: computedData, bonus: 0, totalEarned: officialScore, finalised: a?.status === 'Approved' };
     });
     scores.sort((a, b) => b.totalEarned - a.totalEarned);
     scores.forEach((s, i) => { s.rank = i + 1; });
@@ -822,9 +873,9 @@ function LeaderboardPage({ profile }) {
 
       {top3.length > 0 && (
         <div className="podium-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'flex-end', gap: 20, flexWrap: 'wrap', marginTop: 20 }}>
-          {top3[1] && <PodiumCard p={top3[1]} place={2} />}
-          {top3[0] && <PodiumCard p={top3[0]} place={1} />}
-          {top3[2] && <PodiumCard p={top3[2]} place={3} />}
+          {top3[1] && <PodiumCard p={top3[1]} place={2} onClick={() => setSelectedStaff(top3[1])} />}
+          {top3[0] && <PodiumCard p={top3[0]} place={1} onClick={() => setSelectedStaff(top3[0])} />}
+          {top3[2] && <PodiumCard p={top3[2]} place={3} onClick={() => setSelectedStaff(top3[2])} />}
         </div>
       )}
 
@@ -832,7 +883,7 @@ function LeaderboardPage({ profile }) {
         <h3 style={{ marginTop: 0, marginBottom: 20 }}>{filtering ? 'Results' : 'Other Staff Members'}</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 15 }}>
           {rest.map(r => (
-            <div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 15, padding: 15, border: r.id === profile.id ? '2px solid #2563eb' : '1px solid #f1f5f9', borderRadius: 12, background: '#f8fafc' }}>
+            <div key={r.id} onClick={() => setSelectedStaff(r)} style={{ display: 'flex', alignItems: 'center', gap: 15, padding: 15, border: r.id === profile.id ? '2px solid #2563eb' : '1px solid #f1f5f9', borderRadius: 12, background: '#f8fafc', cursor: 'pointer', transition: 'all 0.2s' }}>
               <Avatar url={r.avatar_url} name={r.full_name} size={50} />
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.full_name}{r.id === profile.id && ' (You)'}</div>
@@ -847,6 +898,8 @@ function LeaderboardPage({ profile }) {
           {rest.length === 0 && <p style={{ color: '#64748b', gridColumn: '1 / -1' }}>No staff members found.</p>}
         </div>
       </div>
+
+      {selectedStaff && <ScoreBreakdownModal staff={selectedStaff} onClose={() => setSelectedStaff(null)} />}
     </div>
   );
 }
@@ -929,7 +982,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
     const filePath = `public/${staffId}_${Date.now()}.jpg`;
     const { error: upErr } = await supabase.storage.from('avatars').upload(filePath, file);
     if (upErr) return toast(upErr.message, 'error');
-    const { data: urlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
+    const { data: urlData } = await supabase.storage.from('avatars').getPublicUrl(filePath);
     await supabase.from('profiles').update({ avatar_url: urlData.publicUrl }).eq('id', staffId);
     e.target.value = ''; toast('Photo updated'); fetchStaff();
   }
