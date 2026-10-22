@@ -8,12 +8,12 @@ import { isSupabaseConfigured, supabase } from './lib/supabase';
 
 const domains = [
   { code: 'D1', name: 'Teaching, Learning & Learner Achievement', weight: 25, color: '#2563eb' },
-  { code: 'D2', name: 'Student Mentoring, Wellbeing & Holistic Development', weight: 15, color: '#7c3aed' },
-  { code: 'D3', name: 'Campus Engagement & Institutional Responsibilities', weight: 15, color: '#d97706' },
-  { code: 'D4', name: 'Collaboration, Communication & Campus Community', weight: 10, color: '#0d9488' },
-  { code: 'D5', name: 'Personal & Professional Development, TPD & Research', weight: 10, color: '#db2777' },
-  { code: 'D6', name: 'Professionalism, Reliability & Institutional Responsibility', weight: 15, color: '#16a34a' },
-  { code: 'D7', name: 'Academic Leadership, Governance & Institutional Contribution', weight: 10, color: '#4f46e5' }
+  { code: 'D2', name: 'Student Mentoring & Wellbeing', weight: 15, color: '#7c3aed' },
+  { code: 'D3', name: 'Campus Engagement & Responsibilities', weight: 15, color: '#d97706' },
+  { code: 'D4', name: 'Collaboration & Communication', weight: 10, color: '#0d9488' },
+  { code: 'D5', name: 'Professional Development & TPD', weight: 10, color: '#db2777' },
+  { code: 'D6', name: 'Professionalism & Reliability', weight: 15, color: '#16a34a' },
+  { code: 'D7', name: 'Academic Leadership & Governance', weight: 10, color: '#4f46e5' }
 ];
 
 const nav = [
@@ -239,7 +239,7 @@ function DashboardPage() {
 }
 
 // ==========================================
-// 3. STAFF LEADERBOARD (WITH PHOTOS & PODIUM)
+// 3. STAFF LEADERBOARD
 // ==========================================
 function AllStaffScoresPage() {
   const [data, setData] = useState([]);
@@ -347,7 +347,7 @@ function AllStaffScoresPage() {
 }
 
 // ==========================================
-// 4. STAFF DIRECTORY (With Photo Upload)
+// 4. STAFF DIRECTORY
 // ==========================================
 function StaffDirectoryPage({ currentUserRole }) {
   const [staff, setStaff] = useState([]);
@@ -513,12 +513,12 @@ function StaffDirectoryPage({ currentUserRole }) {
 }
 
 // ==========================================
-// 5. DUTIES & TASKS
+// 5. DUTIES & TASKS (Auto-Marks Setup)
 // ==========================================
 function DutyMonitoringPage({ userRole, profile }) {
   const [duties, setDuties] = useState([]);
   const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '' });
+  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 });
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
@@ -536,8 +536,15 @@ function DutyMonitoringPage({ userRole, profile }) {
   async function handleAssign(e) {
     e.preventDefault();
     if (!form.title || !form.staff_id) return alert('Fill all fields');
-    await supabase.from('duty_records').insert({ title: form.title, staff_id: form.staff_id, deadline: form.deadline || null, status: 'Pending' });
-    alert('✅ Duty Assigned!'); setForm({ title: '', staff_id: '', deadline: '' }); setShowForm(false); fetchDuties();
+    await supabase.from('duty_records').insert({ 
+      title: form.title, 
+      staff_id: form.staff_id, 
+      deadline: form.deadline || null, 
+      status: 'Pending',
+      domain_code: form.domain_code,
+      marks: Number(form.marks)
+    });
+    alert('✅ Duty Assigned!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 }); setShowForm(false); fetchDuties();
   }
 
   async function markDone(id) { await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', id); fetchDuties(); }
@@ -554,12 +561,20 @@ function DutyMonitoringPage({ userRole, profile }) {
           {showForm && (
             <form onSubmit={handleAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginTop: 20, alignItems: 'flex-end' }}>
               <label style={{ flex: '1 1 200px' }}>Duty Title:<br/>
-                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. CCE Exam Work" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
-              <label style={{ flex: '1 1 200px' }}>Assign To:<br/>
+              <label style={{ flex: '1 1 150px' }}>Assign To:<br/>
                 <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
                   <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
                 </select>
+              </label>
+              <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
+                <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
+                  {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
+                </select>
+              </label>
+              <label style={{ flex: '0 1 100px' }}>Marks:<br/>
+                <input type="number" min="1" max="10" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
               <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
                 <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
@@ -573,14 +588,17 @@ function DutyMonitoringPage({ userRole, profile }) {
         <h3>Duty Records</h3>
         <div className="table-responsive">
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 600 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Duty</th><th style={{ padding: 12 }}>Deadline</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Duty & Domain</th><th style={{ padding: 12 }}>Deadline</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
             <tbody>
               {duties.map(d => {
                 const isOverdue = d.deadline && d.deadline < today && d.status !== 'Completed';
                 return (
                   <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9', background: isOverdue ? '#fef2f2' : 'transparent' }}>
                     <td style={{ padding: 12 }}>{d.profiles?.full_name}</td>
-                    <td style={{ padding: 12 }}>{d.title}</td>
+                    <td style={{ padding: 12 }}>
+                      <b>{d.title}</b><br/>
+                      <span style={{fontSize: 11, color: '#64748b'}}>{d.domain_code || 'No Domain'} (+{d.marks || 0} Marks)</span>
+                    </td>
                     <td style={{ padding: 12, color: isOverdue ? '#ef4444' : 'inherit', fontWeight: isOverdue ? 'bold' : 'normal' }}>
                       {d.deadline || '-'} {isOverdue && <AlertTriangle size={14} style={{ display: 'inline', marginLeft: 5 }} />}
                     </td>
@@ -613,7 +631,7 @@ function DutyMonitoringPage({ userRole, profile }) {
 function SpecialTaskPage({ userRole, profile }) {
   const [tasks, setTasks] = useState([]);
   const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '' });
+  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 });
   const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
@@ -631,8 +649,15 @@ function SpecialTaskPage({ userRole, profile }) {
   async function handleCreate(e) {
     e.preventDefault();
     if (!form.title || !form.staff_id) return alert('Fill all fields');
-    await supabase.from('special_tasks').insert({ title: form.title, staff_id: form.staff_id, deadline: form.deadline || null, status: 'Pending' });
-    alert('✅ Task Created!'); setForm({ title: '', staff_id: '', deadline: '' }); setShowForm(false); fetchTasks();
+    await supabase.from('special_tasks').insert({ 
+      title: form.title, 
+      staff_id: form.staff_id, 
+      deadline: form.deadline || null, 
+      status: 'Pending',
+      domain_code: form.domain_code,
+      marks: Number(form.marks)
+    });
+    alert('✅ Task Created!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
   }
 
   async function markDone(id) { await supabase.from('special_tasks').update({ status: 'Completed' }).eq('id', id); fetchTasks(); }
@@ -649,12 +674,20 @@ function SpecialTaskPage({ userRole, profile }) {
           {showForm && (
             <form onSubmit={handleCreate} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginTop: 20, alignItems: 'flex-end' }}>
               <label style={{ flex: '1 1 200px' }}>Task Title:<br/>
-                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Lead New Project" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
-              <label style={{ flex: '1 1 200px' }}>Assign To:<br/>
+              <label style={{ flex: '1 1 150px' }}>Assign To:<br/>
                 <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
                   <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
                 </select>
+              </label>
+              <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
+                <select value={form.domain_code} onChange={e => setForm({...form, domain_code: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
+                  {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
+                </select>
+              </label>
+              <label style={{ flex: '0 1 100px' }}>Marks:<br/>
+                <input type="number" min="1" max="10" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
               <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
                 <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
@@ -668,14 +701,17 @@ function SpecialTaskPage({ userRole, profile }) {
         <h3>Special Tasks</h3>
         <div className="table-responsive">
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 600 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Task</th><th style={{ padding: 12 }}>Deadline</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Task & Domain</th><th style={{ padding: 12 }}>Deadline</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
             <tbody>
               {tasks.map(t => {
                 const isOverdue = t.deadline && t.deadline < today && t.status !== 'Completed';
                 return (
                   <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9', background: isOverdue ? '#fef2f2' : 'transparent' }}>
                     <td style={{ padding: 12 }}>{t.profiles?.full_name}</td>
-                    <td style={{ padding: 12 }}>{t.title}</td>
+                    <td style={{ padding: 12 }}>
+                      <b>{t.title}</b><br/>
+                      <span style={{fontSize: 11, color: '#64748b'}}>{t.domain_code || 'No Domain'} (+{t.marks || 0} Marks)</span>
+                    </td>
                     <td style={{ padding: 12, color: isOverdue ? '#ef4444' : 'inherit', fontWeight: isOverdue ? 'bold' : 'normal' }}>
                       {t.deadline || '-'} {isOverdue && <AlertTriangle size={14} style={{ display: 'inline', marginLeft: 5 }} />}
                     </td>
@@ -765,7 +801,7 @@ function EvidencePortfolioPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 7. SEVEN DOMAIN APPRAISAL (With Penalty)
+// 7. SEVEN DOMAIN APPRAISAL (Fixed Auto-Marks Logic)
 // ==========================================
 function SevenDomainAppraisalPage({ userRole, profile }) {
   const [staffList, setStaffList] = useState([]);
@@ -775,6 +811,7 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
   const [status, setStatus] = useState('Draft');
   const [saving, setSaving] = useState(false);
   const [penalty, setPenalty] = useState({ count: 0, marks: 0 });
+  const [autoMarks, setAutoMarks] = useState({}); 
 
   const isTeacher = userRole === 'teacher';
   const isReviewer = userRole === 'admin' || userRole === 'appraisal_authority' || userRole === 'coordinator';
@@ -787,6 +824,7 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
   useEffect(() => {
     if (!selectedStaff) return;
     
+    // 1. മാനുവൽ റേറ്റിംഗ് എടുക്കുന്നു
     supabase.from('appraisals').select('id, status, appraisal_ratings(domain_code, rating, comments)').eq('staff_id', selectedStaff).eq('cycle', '2026-2027').maybeSingle().then(({ data }) => {
       if (data) {
         setStatus(data.status || 'Draft');
@@ -798,6 +836,7 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
       } else { setStatus('Draft'); setRatings({}); setComments({}); }
     });
 
+    // 2. പെനാൽറ്റി കണക്കാക്കുന്നു
     const today = new Date().toISOString().split('T')[0];
     Promise.all([
       supabase.from('duty_records').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').lt('deadline', today),
@@ -807,10 +846,32 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
       setPenalty({ count: overdueCount, marks: overdueCount * 2 });
     });
 
+    // 3. പൂർത്തിയാക്കിയ ജോലികളുടെ ഓട്ടോ മാർക്കുകൾ കണക്കാക്കുന്നു (Domain-wise)
+    Promise.all([
+      supabase.from('duty_records').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed'),
+      supabase.from('special_tasks').select('domain_code, marks').eq('staff_id', selectedStaff).eq('status', 'Completed')
+    ]).then(([duties, tasks]) => {
+      const marksMap = {};
+      [...(duties.data || []), ...(tasks.data || [])].forEach(item => {
+        if (item.domain_code && item.marks) {
+          marksMap[item.domain_code] = (marksMap[item.domain_code] || 0) + Number(item.marks);
+        }
+      });
+      setAutoMarks(marksMap);
+    });
+
   }, [selectedStaff]);
 
-  const baseScore = domains.reduce((sum, d) => sum + ((ratings[d.code] || 0) / 5) * d.weight, 0);
-  const totalScore = Math.max(0, baseScore - penalty.marks);
+  // ഓരോ ഡൊമെയ്നിന്റെയും അന്തിമ സ്കോർ കണക്കാക്കുന്നു (Max limit weight-il othungum)
+  const calculateDomainTotal = (domainCode, weight) => {
+    const manualScore = ((ratings[domainCode] || 0) / 5) * weight;
+    const autoScore = autoMarks[domainCode] || 0;
+    return Math.min(weight, manualScore + autoScore); 
+  };
+
+  // ആകെ ഉള്ള സ്കോർ കണക്കാക്കുന്നു
+  const grandTotal = domains.reduce((sum, d) => sum + calculateDomainTotal(d.code, d.weight), 0);
+  const totalScore = Math.max(0, grandTotal - penalty.marks);
 
   async function handleAction(actionType) {
     if (!selectedStaff) return alert('Select staff first');
@@ -853,9 +914,9 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
         </div>
         
         <div style={{ textAlign: 'right', background: '#f8fafc', padding: 15, borderRadius: 8, border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: 13, color: '#64748b' }}>Base Score: {baseScore.toFixed(2)}</div>
-          {penalty.count > 0 && <div style={{ fontSize: 13, color: '#ef4444', fontWeight: 'bold' }}>Missed Deadlines: {penalty.count} (-{penalty.marks} marks)</div>}
+          <div style={{ fontSize: 13, color: '#64748b' }}>Overall Total Score</div>
           <div style={{ fontSize: 28, fontWeight: 'bold', color: '#2563eb', marginTop: 5 }}>{totalScore.toFixed(2)} <span style={{fontSize: 14, color: '#94a3b8'}}>/ 100</span></div>
+          {penalty.count > 0 && <div style={{ fontSize: 12, color: '#ef4444', fontWeight: 'bold', marginTop: 4 }}>Penalty Applied: -{penalty.marks} Marks</div>}
         </div>
       </div>
 
@@ -867,25 +928,43 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
             </div>
           )}
 
-          {domains.map(d => (
-            <div key={d.code} style={{ background: isReadOnly ? '#f8fafc' : '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ background: d.color, color: '#fff', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 'bold' }}>{d.code}</span><b style={{ fontSize: 16 }}>{d.name}</b></div>
-                  <div style={{ fontSize: 13, color: '#64748b', marginTop: 5 }}>Weight: {d.weight} Marks</div>
+          {domains.map(d => {
+            const autoMark = autoMarks[d.code] || 0;
+            const manualMark = ((ratings[d.code] || 0) / 5) * d.weight;
+            const domainTotal = calculateDomainTotal(d.code, d.weight);
+            
+            return (
+              <div key={d.code} style={{ background: isReadOnly ? '#f8fafc' : '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 15 }}>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><span style={{ background: d.color, color: '#fff', padding: '4px 10px', borderRadius: 20, fontSize: 12, fontWeight: 'bold' }}>{d.code}</span><b style={{ fontSize: 16 }}>{d.name}</b></div>
+                    <div style={{ fontSize: 13, color: '#64748b', marginTop: 5 }}>Max Weight: {d.weight} Marks</div>
+                  </div>
+                  
+                  {/* ഇവിടെയാണ് മാർക്ക് കൃത്യമായി കാണിക്കുന്നത് */}
+                  <div style={{ textAlign: 'right', minWidth: 120, background: '#f8fafc', padding: '8px 12px', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#64748b', marginBottom: 4 }}>
+                      <span>Manual:</span> <span>{manualMark.toFixed(1)}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: autoMark > 0 ? '#16a34a' : '#94a3b8', fontWeight: 'bold', marginBottom: 4 }}>
+                      <span>Auto (Duties):</span> <span>+{autoMark}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 'bold', color: d.color, borderTop: '1px solid #cbd5e1', paddingTop: 4 }}>
+                      <span>Total:</span> <span>{domainTotal.toFixed(1)}</span>
+                    </div>
+                  </div>
                 </div>
-                <div style={{ fontSize: 18, fontWeight: 'bold', color: d.color }}>{(((ratings[d.code] || 0) / 5) * d.weight).toFixed(1)} / {d.weight}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 15 }}>
+                  {[1, 2, 3, 4, 5].map(val => (
+                    <button key={val} disabled={isReadOnly} onClick={() => setRatings(prev => ({...prev, [d.code]: val}))} style={{ flex: '1 1 100px', padding: 10, borderRadius: 8, border: ratings[d.code] === val ? `2px solid ${d.color}` : '1px solid #cbd5e1', background: ratings[d.code] === val ? `${d.color}15` : '#fff', cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, color: ratings[d.code] === val ? d.color : '#475569' }}>
+                      {val} - {val === 5 ? 'Exceptional' : val === 4 ? 'Strong' : val === 3 ? 'Expected' : val === 2 ? 'Developing' : 'Unsatisfactory'}
+                    </button>
+                  ))}
+                </div>
+                <textarea readOnly={isReadOnly} placeholder="Comments..." value={comments[d.code] || ''} onChange={e => setComments(prev => ({...prev, [d.code]: e.target.value}))} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minHeight: 60, fontFamily: 'inherit', background: isReadOnly ? '#f1f5f9' : '#fff', boxSizing: 'border-box' }} />
               </div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 15 }}>
-                {[1, 2, 3, 4, 5].map(val => (
-                  <button key={val} disabled={isReadOnly} onClick={() => setRatings(prev => ({...prev, [d.code]: val}))} style={{ flex: '1 1 100px', padding: 10, borderRadius: 8, border: ratings[d.code] === val ? `2px solid ${d.color}` : '1px solid #cbd5e1', background: ratings[d.code] === val ? `${d.color}15` : '#fff', cursor: isReadOnly ? 'not-allowed' : 'pointer', fontWeight: 600, color: ratings[d.code] === val ? d.color : '#475569' }}>
-                    {val} - {val === 5 ? 'Exceptional' : val === 4 ? 'Strong' : val === 3 ? 'Expected' : val === 2 ? 'Developing' : 'Unsatisfactory'}
-                  </button>
-                ))}
-              </div>
-              <textarea readOnly={isReadOnly} placeholder="Comments..." value={comments[d.code] || ''} onChange={e => setComments(prev => ({...prev, [d.code]: e.target.value}))} style={{ width: '100%', padding: 10, borderRadius: 8, border: '1px solid #cbd5e1', minHeight: 60, fontFamily: 'inherit', background: isReadOnly ? '#f1f5f9' : '#fff', boxSizing: 'border-box' }} />
-            </div>
-          ))}
+            );
+          })}
           
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginBottom: 40 }}>
             {isTeacher && (status === 'Draft' || status === 'Returned') && (
@@ -912,7 +991,7 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 8. SPECIAL POINTS (Edit & Delete)
+// 8. SPECIAL POINTS
 // ==========================================
 function SpecialPointsPage() {
   const [staffList, setStaffList] = useState([]);
