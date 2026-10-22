@@ -697,26 +697,55 @@ function PodiumCard({ p, place }) {
   );
 }
 
+// Replace your whole `function LeaderboardPage({ profile }) { ... }` with this one.
+// (PodiumCard stays as it is.)
 function LeaderboardPage({ profile }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [needsSql, setNeedsSql] = useState(false);
   const [q, setQ] = useState('');
   const [dept, setDept] = useState('all');
+  const rater = profile.role === 'admin' || profile.role === 'appraisal_authority';
+
+  const load = useCallback(async () => {
+    let apprQ = supabase.from('appraisals').select('staff_id, status, final_score, appraisal_sub_ratings(sub_code, rating)').eq('cycle', CYCLE);
+    if (!rater) apprQ = apprQ.eq('status', 'Approved'); // draft ratings stay private
+    const [{ data: staff }, { data: appr }, lw, lb] = await Promise.all([
+      supabase.from('profiles').select('id, full_name, department, avatar_url').eq('active', true),
+      apprQ,
+      supabase.rpc('leaderboard_work', { p_cycle: CYCLE }),
+      supabase.rpc('leaderboard_bonus')
+    ]);
+    setNeedsSql(!!(lw.error || lb.error));
+
+    const wmBy = {};
+    (lw.data || []).forEach(r => {
+      (wmBy[r.staff_id] = wmBy[r.staff_id] || {})[r.sub_code] = { assigned: Number(r.assigned), earned: Number(r.earned), n: Number(r.n), done: Number(r.done) };
+    });
+    const bonusBy = {};
+    (lb.data || []).forEach(r => { (bonusBy[r.staff_id] = bonusBy[r.staff_id] || []).push({ status: 'Approved', points_approved: Number(r.pts), sub_code: r.sub_code }); });
+
+    const scores = (staff || []).map(s => {
+      const a = (appr || []).find(x => x.staff_id === s.id);
+      const rm = {}; let hasRatings = false;
+      (a?.appraisal_sub_ratings || []).forEach(r => { if (r.rating !== null && r.rating !== undefined) { rm[r.sub_code] = r.rating; hasRatings = true; } });
+      const wm = withBonus(wmBy[s.id] || {}, bonusBy[s.id] || []);
+      let officialScore = 0;
+      if (a?.status === 'Approved' && !hasRatings) officialScore = Number(a.final_score) || 0; // ratings not readable -> use locked score
+      else if (hasRatings || Object.keys(wm).length) officialScore = computeScores(rm, wm).total;
+      officialScore = Math.min(100, officialScore);
+      return { ...s, officialScore, bonus: 0, totalEarned: officialScore, finalised: a?.status === 'Approved' };
+    });
+    scores.sort((a, b) => b.totalEarned - a.totalEarned);
+    scores.forEach((s, i) => { s.rank = i + 1; });
+    setData(scores); setLoading(false);
+  }, [rater]);
 
   useEffect(() => {
-    (async () => {
-      const { data: staff } = await supabase.from('profiles').select('id, full_name, department, avatar_url').eq('active', true);
-      const { data: appr } = await supabase.from('appraisals').select('staff_id, final_score').eq('status', 'Approved').eq('cycle', CYCLE);
-      const scores = (staff || []).map(s => {
-        const base = appr?.find(a => a.staff_id === s.id)?.final_score || 0;
-        const officialScore = Math.min(100, Number(base));
-        return { ...s, officialScore, bonus: 0, totalEarned: officialScore };
-      });
-      scores.sort((a, b) => b.totalEarned - a.totalEarned);
-      scores.forEach((s, i) => { s.rank = i + 1; });
-      setData(scores); setLoading(false);
-    })();
-  }, []);
+    load();
+    const t = setInterval(load, 60000); // refresh every minute
+    return () => clearInterval(t);
+  }, [load]);
 
   const depts = [...new Set(data.map(s => s.department).filter(Boolean))].sort();
   const filtered = data.filter(s => (dept === 'all' || s.department === dept) && s.full_name.toLowerCase().includes(q.toLowerCase()));
@@ -724,18 +753,22 @@ function LeaderboardPage({ profile }) {
   const top3 = filtering ? [] : filtered.slice(0, 3);
   const rest = filtering ? filtered : filtered.slice(3);
 
-  const exportCSV = () => data.length && downloadCSV(`Staff_Leaderboard_${CYCLE}.csv`, ['Rank', 'Staff Name', 'Department', 'Official Appraisal (Max 100)'], filtered.map(r => [r.rank, r.full_name, r.department || '-', r.officialScore.toFixed(2)]));
+  const exportCSV = () => data.length && downloadCSV(`Staff_Leaderboard_${CYCLE}.csv`, ['Rank', 'Staff Name', 'Department', 'Score (Max 100)'], filtered.map(r => [r.rank, r.full_name, r.department || '-', r.officialScore.toFixed(2)]));
 
   if (loading) return <Empty text="Loading scores..." />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      {needsSql && <div style={{ background: '#fef3c7', color: '#92400e', padding: 14, borderRadius: 10, fontSize: 14 }}>Live scores need the database functions. Run <b>setup_live_leaderboard.sql</b> once in Supabase → SQL Editor.</div>}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h2 style={{ margin: '0 0 10px 0', fontSize: 28, color: '#1e293b' }}>🏆 Performance Leaderboard</h2>
-          <p style={{ color: '#64748b', margin: 0 }}>Official Appraisal Scores (Max 100). Approved bonus points are already included in the score (D7). Only final-approved appraisals count.</p>
+          <p style={{ color: '#64748b', margin: 0 }}>Live scores (Max 100): approved work and bonus points are added as soon as they are approved. Refreshes every minute.</p>
         </div>
-        <button onClick={exportCSV} style={S.btn('#16a34a')}><Download size={18} /> Export CSV</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={load} style={S.btn('#475569')}>Refresh</button>
+          <button onClick={exportCSV} style={S.btn('#16a34a')}><Download size={18} /> Export CSV</button>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
@@ -765,8 +798,7 @@ function LeaderboardPage({ profile }) {
               </div>
               <div style={{ textAlign: 'right', flexShrink: 0 }}>
                 <div style={{ fontWeight: 'bold', color: '#2563eb', fontSize: 18 }}>{r.officialScore.toFixed(1)}</div>
-                {r.bonus > 0 && <div style={{ fontSize: 11, color: '#ea580c', fontWeight: 'bold' }}>+{r.bonus} Bonus</div>}
-                <div style={{ fontSize: 11, color: '#94a3b8' }}>Rank #{r.rank}</div>
+                <div style={{ fontSize: 11, color: '#94a3b8' }}>Rank #{r.rank}{r.finalised ? ' • final' : ''}</div>
               </div>
             </div>
           ))}
