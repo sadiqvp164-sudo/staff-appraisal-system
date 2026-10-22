@@ -135,18 +135,20 @@ function computeScores(ratings, work) {
         // ബേസ് മാർക്ക് (പരമാവധി 100% അല്ലെങ്കിൽ 1)
         wp = Math.min(1, wk.earned / wk.assigned);
         
-        // ---- പുതിയ ലോജിക്: Extra Points ----
-        // അസൈൻ ചെയ്തതിൽ കൂടുതൽ ചെയ്താൽ ഓരോ ജോലിക്കും 2 പോയിന്റ് വീതം നൽകുന്നു.
-        if (wk.earned > wk.assigned) {
-          const extraWorks = wk.earned - wk.assigned;
-          extraPoints = extraWorks * 2; // 1 extra work = 2 points
+        // ---- പുതിയ ലോജിക്: ചെയ്ത ജോലികളുടെ എണ്ണം അനുസരിച്ച് എക്സ്ട്രാ പോയിന്റ് ----
+        // അവർ എത്ര ജോലികൾ ഫിനിഷ് ചെയ്തു (wk.done) അതിന് ആനുപാതികമായി പോയിന്റ് നൽകുന്നു.
+        if (wk.done > 0) {
+          const pointsPerWork = 2; // 1 ജോലി ചെയ്താൽ 2 പോയിന്റ് (നിങ്ങൾക്ക് ഇഷ്ടാനുസരണം മാറ്റാം)
+          extraPoints = wk.done * pointsPerWork;
           totalExtraPoints += extraPoints;
         }
       } else if (wk && wk.earned > 0) {
         // അസൈൻ ചെയ്യാതെ ചെയ്യുന്ന ജോലികൾ
         wp = 1; 
-        extraPoints = wk.earned * 2;
-        totalExtraPoints += extraPoints;
+        if (wk.done > 0) {
+          extraPoints = wk.done * 2;
+          totalExtraPoints += extraPoints;
+        }
       }
 
       if (r === 0 && wp === null) {
@@ -174,6 +176,7 @@ function computeScores(ratings, work) {
   });
 
   const baseScore = max ? (sum / max) * 100 : 0;
+  // ബേസ് സ്കോറും എക്സ്ട്രാ പോയിന്റും കൂട്ടുന്നു
   const finalTotal = Math.min(100, baseScore + totalExtraPoints); 
 
   return { subs, per, total: finalTotal, baseScore, totalExtraPoints };
