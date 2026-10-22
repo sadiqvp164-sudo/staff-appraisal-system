@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo, createContext
 import {
   Award, ClipboardList, GraduationCap, LayoutDashboard, LogOut, Menu, Plus,
   ShieldCheck, Users, X, Download, Settings, Edit, Trash2, Camera, Megaphone, Gift, BarChart3,
-  Search, Printer, Pin, Eye, EyeOff
+  Search, Printer, Pin, Eye, EyeOff, KeyRound
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -12,6 +12,8 @@ import { isSupabaseConfigured, supabase } from './lib/supabase';
 const CYCLE = '2026-2027';
 const WORK_SHARE = 0.5; // when a sub-domain has BOTH a rating and work records: 50% work + 50% rating
 const MAX_SUBJECTS = 10;
+const BONUS_SUB = 'AL6'; // approved bonus points feed this sub-domain of D7
+const BONUS_CAP = 10;    // approved bonus points needed for FULL marks in AL6
 
 const RAW_DOMAINS = [
   { code: 'D1', name: 'Teaching, Learning & Learner Achievement', weight: 25, color: '#2563eb', subs: [
@@ -34,7 +36,7 @@ const RAW_DOMAINS = [
     ['PR4', 'Code of Conduct & Professional Ethics', 3], ['PR5', 'HR & Institutional Procedure Compliance', 2], ['PR6', 'Reliability, Accountability & Responsibility', 2]] },
   { code: 'D7', name: 'Academic Leadership, Governance & Institutional Contribution', weight: 10, color: '#4f46e5', subs: [
     ['AL1', 'Academic Committee & Governance Participation', 2], ['AL2', 'Curriculum Development & Academic Planning', 2], ['AL3', 'Academic Decision-Making & Policy Contribution', 2],
-    ['AL4', 'Academic Leadership & Institutional Initiatives', 2], ['AL5', 'Special Academic Contribution', 2]] }
+    ['AL4', 'Academic Leadership & Institutional Initiatives', 2], ['AL5', 'Special Academic Contribution', 2], ['AL6', 'Bonus Points & Special Achievements', 2]] }
 ];
 const domains = RAW_DOMAINS.map(d => ({ ...d, subs: d.subs.map(([code, name, weight]) => ({ code, name, weight, domain: d.code, color: d.color })) }));
 const SUBS = domains.flatMap(d => d.subs);
@@ -57,7 +59,6 @@ const nav = [
   { id: 'scores', label: 'Staff Leaderboard', icon: Award, roles: ALL },
   { id: 'staff', label: 'Staff Directory', icon: Users, roles: ['admin', 'coordinator', 'appraisal_authority'] },
   { id: 'work', label: 'Work & CCE', icon: ClipboardList, roles: ALL },
-  { id: 'bonus', label: 'Bonus Points', icon: Gift, roles: ALL },
   { id: 'appraisal', label: 'Appraisal Workflow', icon: GraduationCap, roles: ALL },
   { id: 'reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'coordinator', 'appraisal_authority'] },
   { id: 'settings', label: 'My Account', icon: Settings, roles: ALL }
@@ -101,6 +102,13 @@ function workMap(items, today = todayStr()) {
     if (done) { e.earned += Math.min(max, Number(i.awarded ?? i.marks) || 0); e.done++; }
   });
   return m;
+}
+
+// Approved bonus points -> work for sub-domain AL6 (BONUS_CAP approved points = full marks)
+function withBonus(wm, entries) {
+  const pts = (entries || []).filter(e => e.status === 'Approved').reduce((a, e) => a + (Number(e.points_approved) || 0), 0);
+  if (pts <= 0) return wm;
+  return { ...wm, [BONUS_SUB]: { assigned: BONUS_CAP, earned: Math.min(BONUS_CAP, pts), n: 1, done: 1, bonus: pts } };
 }
 
 // ------------------------------------------------------------------
@@ -454,7 +462,6 @@ function App() {
           {profile && page === 'scores' && <LeaderboardPage profile={profile} />}
           {profile && page === 'staff' && <StaffDirectoryPage currentUserRole={userRole} profile={profile} />}
           {profile && page === 'work' && <WorkPage userRole={userRole} profile={profile} />}
-          {profile && page === 'bonus' && <BonusPointsPage userRole={userRole} profile={profile} />}
           {profile && page === 'appraisal' && <AppraisalPage userRole={userRole} profile={profile} />}
           {profile && page === 'reports' && <ReportsPage />}
           {profile && page === 'settings' && <AccountSettingsPage profile={profile} reloadProfile={() => loadProfile(profile.id)} />}
@@ -704,12 +711,10 @@ function LeaderboardPage({ profile }) {
     (async () => {
       const { data: staff } = await supabase.from('profiles').select('id, full_name, department, avatar_url').eq('active', true);
       const { data: appr } = await supabase.from('appraisals').select('staff_id, final_score').eq('status', 'Approved').eq('cycle', CYCLE);
-      const { data: points } = await supabase.from('special_point_entries').select('staff_id, points_approved').eq('status', 'Approved');
       const scores = (staff || []).map(s => {
         const base = appr?.find(a => a.staff_id === s.id)?.final_score || 0;
         const officialScore = Math.min(100, Number(base));
-        const bonus = points?.filter(p => p.staff_id === s.id).reduce((sum, c) => sum + Number(c.points_approved || 0), 0) || 0;
-        return { ...s, officialScore, bonus, totalEarned: officialScore + bonus };
+        return { ...s, officialScore, bonus: 0, totalEarned: officialScore };
       });
       scores.sort((a, b) => b.totalEarned - a.totalEarned);
       scores.forEach((s, i) => { s.rank = i + 1; });
@@ -723,7 +728,7 @@ function LeaderboardPage({ profile }) {
   const top3 = filtering ? [] : filtered.slice(0, 3);
   const rest = filtering ? filtered : filtered.slice(3);
 
-  const exportCSV = () => data.length && downloadCSV(`Staff_Leaderboard_${CYCLE}.csv`, ['Rank', 'Staff Name', 'Department', 'Official Appraisal (Max 100)', 'Bonus Points'], filtered.map(r => [r.rank, r.full_name, r.department || '-', r.officialScore.toFixed(2), r.bonus]));
+  const exportCSV = () => data.length && downloadCSV(`Staff_Leaderboard_${CYCLE}.csv`, ['Rank', 'Staff Name', 'Department', 'Official Appraisal (Max 100)'], filtered.map(r => [r.rank, r.full_name, r.department || '-', r.officialScore.toFixed(2)]));
 
   if (loading) return <Empty text="Loading scores..." />;
 
@@ -732,7 +737,7 @@ function LeaderboardPage({ profile }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h2 style={{ margin: '0 0 10px 0', fontSize: 28, color: '#1e293b' }}>🏆 Performance Leaderboard</h2>
-          <p style={{ color: '#64748b', margin: 0 }}>Official Appraisal Scores (Max 100) and separate Bonus Points. Only final-approved appraisals count.</p>
+          <p style={{ color: '#64748b', margin: 0 }}>Official Appraisal Scores (Max 100). Approved bonus points are already included in the score (D7). Only final-approved appraisals count.</p>
         </div>
         <button onClick={exportCSV} style={S.btn('#16a34a')}><Download size={18} /> Export CSV</button>
       </div>
@@ -790,6 +795,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
   const [formData, setFormData] = useState(emptyForm);
   const [edit, setEdit] = useState(null);
   const [view, setView] = useState(null);
+  const [pwFor, setPwFor] = useState(null);
   const fileInputRef = useRef(null);
   const uploadTarget = useRef(null);
 
@@ -836,6 +842,15 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
     const { error } = await supabase.from('profiles').update({ active: next }).eq('id', s.id);
     if (error) return toast(error.message, 'error');
     fetchStaff();
+  }
+
+  async function savePassword(e) {
+    e.preventDefault();
+    if (pwFor.value.length < 6) return toast('Password must be at least 6 characters.', 'error');
+    setPwFor(p => ({ ...p, busy: true }));
+    const { data, error } = await supabase.functions.invoke('set-staff-password', { body: { user_id: pwFor.s.id, password: pwFor.value } });
+    if (error || data?.error) { setPwFor(p => ({ ...p, busy: false })); return toast('Error: ' + (data?.error || error.message), 'error'); }
+    toast(`Password updated for ${pwFor.s.full_name}`); setPwFor(null);
   }
 
   async function handlePhotoUpload(e) {
@@ -909,6 +924,16 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
 
       {view && <StaffProfileModal s={view} onClose={() => setView(null)} />}
 
+      {pwFor && (
+        <Modal title={`Set password – ${pwFor.s.full_name}`} onClose={() => setPwFor(null)} width={420}>
+          <form onSubmit={savePassword} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 13, color: '#64748b' }}>Login ID: <b>{pwFor.s.email || pwFor.s.staff_code}</b>. Tell the staff member the new password; they can change it later in My Account.</div>
+            <input type="text" required minLength={6} autoFocus placeholder="New password (min 6 characters)" value={pwFor.value} onChange={e => setPwFor({ ...pwFor, value: e.target.value })} style={S.input} />
+            <button type="submit" disabled={pwFor.busy} style={S.btn('#2563eb', { justifyContent: 'center' })}>{pwFor.busy ? 'Saving...' : 'Set password'}</button>
+          </form>
+        </Modal>
+      )}
+
       {loading ? <Empty text="Loading..." /> : filtered.length === 0 ? <Empty text="No staff match these filters." /> : (
         <Table heads={['Photo', 'Name & Email', 'Role', 'Department', 'Status', 'Actions']} min={800}>
           {filtered.map(s => (
@@ -936,6 +961,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button title="View profile" onClick={() => setView(s)} style={S.icon()}><Eye size={14} /></button>
                   {isAdmin && <button title="Edit" onClick={() => setEdit(s)} style={S.icon()}><Edit size={14} /></button>}
+                  {isAdmin && <button title="Set password" onClick={() => setPwFor({ s, value: '', busy: false })} style={S.icon()}><KeyRound size={14} /></button>}
                   {isAdmin && <button onClick={() => toggleActive(s)} style={S.sm(s.active === false ? '#16a34a' : '#ef4444')}>{s.active === false ? 'Activate' : 'Deactivate'}</button>}
                 </div>
               </td>
@@ -1030,12 +1056,14 @@ function WorkPage({ userRole, profile }) {
   const canManage = userRole === 'admin' || userRole === 'coordinator';
   const [tab, setTab] = useState('cce');
   const { list: staffList } = useStaff();
-  const tabs = [['cce', 'CCE Works'], ['midterm', 'Midterm Exams'], ['lesson', 'Lesson Plans'], ['duty', 'Weekly Duties'], ['task', 'Special Tasks'], ...(canManage ? [['subjects', 'Subjects']] : [])];
+  const tabs = [['cce', 'CCE Works'], ['midterm', 'Midterm Exams'], ['lesson', 'Lesson Plans'], ['duty', 'Weekly Duties'], ['task', 'Special Tasks'], ['bonus', 'Bonus Points'], ...(canManage ? [['subjects', 'Subjects']] : [])];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       {tab === 'subjects'
         ? <SubjectsTab staffList={staffList} />
+        : tab === 'bonus'
+        ? <BonusPointsPage userRole={userRole} profile={profile} />
         : <WorkTable key={tab} kind={tab} userRole={userRole} profile={profile} staffList={staffList} />}
     </div>
   );
@@ -1582,7 +1610,7 @@ function BonusPointsPage({ userRole, profile }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ ...S.card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ color: '#64748b', fontSize: 14, maxWidth: 520 }}>Bonus points are separate from the official appraisal (max 100) and appear next to the score on the leaderboard once approved.</div>
+        <div style={{ color: '#64748b', fontSize: 14, maxWidth: 520 }}>Approved bonus points count towards D7 – AL6 (Bonus Points & Special Achievements) in the appraisal. {BONUS_CAP} approved points = full marks for that sub-domain.</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <select value={statusF} onChange={e => setStatusF(e.target.value)} style={S.input}><option value="all">All</option><option>Pending</option><option>Approved</option><option>Rejected</option></select>
           <button onClick={() => { setMode('request'); setForm({ title: '', reason: '', points: '', staff_id: '' }); }} style={S.btn('#2563eb')}><Plus size={16} /> Request Points</button>
@@ -1657,6 +1685,7 @@ function AppraisalPage({ userRole, profile }) {
   const [status, setStatus] = useState('Draft');
   const [ratings, setRatings] = useState({}); const [comments, setComments] = useState({});
   const [items, setItems] = useState([]);
+  const [bonusRows, setBonusRows] = useState([]);
   const [remarks, setRemarks] = useState('');
   const [saving, setSaving] = useState(false);
   const [overview, setOverview] = useState([]);
@@ -1672,11 +1701,12 @@ function AppraisalPage({ userRole, profile }) {
   useEffect(() => {
     if (!selected) return;
     (async () => {
-      const [{ data: a }, { data: w }] = await Promise.all([
+      const [{ data: a }, { data: w }, { data: b }] = await Promise.all([
         supabase.from('appraisals').select('*, appraisal_sub_ratings(*)').eq('staff_id', selected).eq('cycle', CYCLE).maybeSingle(),
-        supabase.from('work_items').select('*').eq('staff_id', selected).eq('cycle', CYCLE)
+        supabase.from('work_items').select('*').eq('staff_id', selected).eq('cycle', CYCLE),
+        supabase.from('special_point_entries').select('status, points_approved').eq('staff_id', selected)
       ]);
-      setItems(w || []);
+      setItems(w || []); setBonusRows(b || []);
       const R = {}, C = {};
       (a?.appraisal_sub_ratings || []).forEach(r => { if (r.rating !== null) R[r.sub_code] = r.rating; C[r.sub_code] = r.reviewer_comment || ''; });
       setAppr(a || null); setStatus(a?.status === 'Approved' ? 'Approved' : 'Draft');
@@ -1690,7 +1720,7 @@ function AppraisalPage({ userRole, profile }) {
   }, [tab]);
 
   const shownRatings = hideDraft ? {} : ratings;
-  const wm = useMemo(() => workMap(items), [items]);
+  const wm = useMemo(() => withBonus(workMap(items), bonusRows), [items, bonusRows]);
   const computed = useMemo(() => computeScores(shownRatings, wm), [shownRatings, wm]);
   const staffName = staffList.find(s => s.id === selected)?.full_name || '';
   const shownTotal = locked && appr ? Number(appr.final_score) : computed.total;
@@ -1710,8 +1740,6 @@ function AppraisalPage({ userRole, profile }) {
   }
 
   async function finalize() {
-    const naNoReason = SUBS.find(s => ratings[s.code] === 0 && !(comments[s.code] || '').trim());
-    if (naNoReason) { setOpen(o => ({ ...o, [naNoReason.domain]: true })); return toast(`${naNoReason.code}: N/A needs a short justification in the comment.`, 'error'); }
     const empty = SUBS.filter(s => ratings[s.code] === undefined && !wm[s.code]).length;
     if (!(await confirm(`Finalise and lock this appraisal? ${empty ? `${empty} sub-domain(s) have no rating and no work, so they are treated as not applicable. ` : ''}The score will be locked.`))) return;
     persist('Approved', 'Appraisal finalised');
@@ -1773,6 +1801,12 @@ function AppraisalPage({ userRole, profile }) {
           </div>
         </div>
 
+        {selected && locked && appr && isRater && Math.abs(computed.total - Number(appr.final_score)) > 0.05 && (
+          <div className="no-print" style={{ background: '#fef3c7', color: '#92400e', padding: 14, borderRadius: 10, fontSize: 14 }}>
+            Work or bonus points changed after this appraisal was finalised. Live score: <b>{computed.total.toFixed(2)}</b>, locked score: <b>{Number(appr.final_score).toFixed(2)}</b>. {userRole === 'admin' ? 'Reopen and finalise again to update the locked score.' : 'Ask the Admin to reopen it to update the locked score.'}
+          </div>
+        )}
+
         {!selected && <div style={S.card}><Empty text="Select a staff member to open their appraisal." /></div>}
 
         {selected && (
@@ -1807,7 +1841,9 @@ function AppraisalPage({ userRole, profile }) {
                         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
                           <div style={{ flex: '1 1 260px' }}>
                             <b style={{ color: d.color }}>{s.code}</b> <b>{s.name}</b> <span style={{ color: '#64748b', fontSize: 12 }}>({s.weight} marks)</span>
-                            {w && <div style={{ fontSize: 12, color: '#0d9488', marginTop: 3 }}>Work: {w.earned.toFixed(1)}/{w.assigned.toFixed(1)} pts • {w.done}/{w.n} completed</div>}
+                            {w && (w.bonus
+                              ? <div style={{ fontSize: 12, color: '#ea580c', marginTop: 3 }}>Bonus: {w.bonus} approved point(s) • full marks at {BONUS_CAP}</div>
+                              : <div style={{ fontSize: 12, color: '#0d9488', marginTop: 3 }}>Work: {w.earned.toFixed(1)}/{w.assigned.toFixed(1)} pts • {w.done}/{w.n} completed</div>)}
                           </div>
                           <div style={{ fontSize: 13, textAlign: 'right', minWidth: 90 }}>
                             <div style={{ color: '#64748b' }}>Score</div>
@@ -1822,7 +1858,7 @@ function AppraisalPage({ userRole, profile }) {
                           </div>
                         )}
                         {canRate
-                          ? <input placeholder="Evidence / comment (required for N/A)" value={comments[s.code] || ''} onChange={e => setComments(p => ({ ...p, [s.code]: e.target.value }))} style={{ ...S.input, width: '100%', padding: 8, marginTop: 8 }} />
+                          ? <input placeholder="Evidence / comment (optional)" value={comments[s.code] || ''} onChange={e => setComments(p => ({ ...p, [s.code]: e.target.value }))} style={{ ...S.input, width: '100%', padding: 8, marginTop: 8 }} />
                           : (!hideDraft && comments[s.code]) ? <div style={{ fontSize: 12, color: '#475569', marginTop: 8 }}><b>Comment:</b> {comments[s.code]}</div> : null}
                       </div>
                     );
@@ -1875,11 +1911,12 @@ function ReportsPage() {
 
   useEffect(() => {
     (async () => {
-      const [ap, wk] = await Promise.all([
+      const [ap, wk, bp] = await Promise.all([
         supabase.from('appraisals').select('staff_id, status, final_score, appraisal_sub_ratings(sub_code, rating)').eq('cycle', CYCLE),
-        supabase.from('work_items').select('staff_id, kind, status, due_date, month, sub_code, marks, awarded, submitted_on').eq('cycle', CYCLE)
+        supabase.from('work_items').select('staff_id, kind, status, due_date, month, sub_code, marks, awarded, submitted_on').eq('cycle', CYCLE),
+        supabase.from('special_point_entries').select('staff_id, status, points_approved')
       ]);
-      setRaw({ ap: ap.data || [], wk: wk.data || [] });
+      setRaw({ ap: ap.data || [], wk: wk.data || [], bp: bp.data || [] });
     })();
   }, []);
 
@@ -1890,7 +1927,7 @@ function ReportsPage() {
       const a = raw.ap.find(x => x.staff_id === s.id) || null;
       const rm = {};
       (a?.appraisal_sub_ratings || []).forEach(r => { if (r.rating !== null && r.rating !== undefined) rm[r.sub_code] = r.rating; });
-      return { s, a, ...computeScores(rm, workMap(raw.wk.filter(x => x.staff_id === s.id))) };
+      return { s, a, ...computeScores(rm, withBonus(workMap(raw.wk.filter(x => x.staff_id === s.id)), raw.bp.filter(x => x.staff_id === s.id))) };
     });
   }, [raw, staff, dept]);
 
