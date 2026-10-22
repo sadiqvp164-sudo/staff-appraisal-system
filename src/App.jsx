@@ -541,11 +541,11 @@ function DutyMonitoringPage({ userRole, profile }) {
     setDuties(data || []);
   }
 
-  async function handleAssign(e) {
+    async function handleAssign(e) {
     e.preventDefault();
     if (!form.title || !form.staff_id) return alert('Please fill all fields');
     
-    await supabase.from('duty_records').insert({ 
+    const { error } = await supabase.from('duty_records').insert({ 
       title: form.title, 
       staff_id: form.staff_id, 
       deadline: form.deadline || null, 
@@ -555,6 +555,11 @@ function DutyMonitoringPage({ userRole, profile }) {
       is_recurring: form.is_recurring
     });
     
+    if (error) {
+      alert("Error assigning duty: " + error.message); // ഇത് എറർ കാണിക്കും
+      return;
+    }
+
     alert('✅ Duty Assigned!'); 
     setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5, is_recurring: false }); 
     setShowForm(false); 
