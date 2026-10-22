@@ -119,7 +119,7 @@ function withBonus(wm, entries) {
 // Marks calculation with extra points for over-performing
 function computeScores(ratings, work) {
   const subs = {}; const per = {}; let sum = 0, max = 0;
-  let totalExtraPoints = 0; // അധിക പോയിന്റുകൾ കണക്കാക്കാൻ
+  let totalExtraPoints = 0; 
 
   domains.forEach(d => {
     let dEarn = 0, dExcluded = 0;
@@ -132,21 +132,21 @@ function computeScores(ratings, work) {
       let extraPoints = 0;
 
       if (wk && wk.assigned > 0) {
-        // ബേസ് മാർക്ക് (പരമാവധി 100% അല്ലെങ്കിൽ 1)
         wp = Math.min(1, wk.earned / wk.assigned);
         
-        // ---- പുതിയ ലോജിക്: ചെയ്ത ജോലികളുടെ എണ്ണം അനുസരിച്ച് എക്സ്ട്രാ പോയിന്റ് ----
-        // അവർ എത്ര ജോലികൾ ഫിനിഷ് ചെയ്തു (wk.done) അതിന് ആനുപാതികമായി പോയിന്റ് നൽകുന്നു.
-        if (wk.done > 0) {
-          const pointsPerWork = 2; // 1 ജോലി ചെയ്താൽ 2 പോയിന്റ് (നിങ്ങൾക്ക് ഇഷ്ടാനുസരണം മാറ്റാം)
-          extraPoints = wk.done * pointsPerWork;
+        // ---- പുതിയ ലോജിക് ----
+        // ഫുൾ മാർക്ക് (100%) കിട്ടിയാൽ മാത്രം, അതിൽ കൂടുതലുള്ള ജോലികൾക്ക് എക്സ്ട്രാ പോയിന്റ് നൽകുക.
+        // wk.done > 1 എന്നത് കൊണ്ട് അർത്ഥമാക്കുന്നത്, ആദ്യത്തെ ജോലി ബേസ് സ്കോറിന് നൽകി, ബാക്കിയുള്ളവയ്ക്ക് എക്സ്ട്രാ നൽകുന്നു.
+        if (wk.earned >= wk.assigned && wk.done > 1) {
+          const extraWorks = wk.done - 1; // ആദ്യത്തെ 1 എണ്ണം കഴിഞ്ഞുള്ളത്
+          extraPoints = extraWorks * 2; 
           totalExtraPoints += extraPoints;
         }
       } else if (wk && wk.earned > 0) {
-        // അസൈൻ ചെയ്യാതെ ചെയ്യുന്ന ജോലികൾ
         wp = 1; 
-        if (wk.done > 0) {
-          extraPoints = wk.done * 2;
+        if (wk.done > 1) {
+          const extraWorks = wk.done - 1;
+          extraPoints = extraWorks * 2;
           totalExtraPoints += extraPoints;
         }
       }
@@ -167,8 +167,9 @@ function computeScores(ratings, work) {
     });
     
     const dMax = Math.max(0, d.weight - dExcluded);
-    if (!dMax) per[d.code] = { na: true, score: 0, max: 0 };
-    else {
+    if (!dMax) {
+      per[d.code] = { na: true, score: 0, max: 0 };
+    } else {
       const sc = Math.min(dMax, dEarn);
       per[d.code] = { na: false, score: sc, max: dMax };
       sum += sc; max += dMax;
@@ -176,7 +177,6 @@ function computeScores(ratings, work) {
   });
 
   const baseScore = max ? (sum / max) * 100 : 0;
-  // ബേസ് സ്കോറും എക്സ്ട്രാ പോയിന്റും കൂട്ടുന്നു
   const finalTotal = Math.min(100, baseScore + totalExtraPoints); 
 
   return { subs, per, total: finalTotal, baseScore, totalExtraPoints };
