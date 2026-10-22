@@ -1789,8 +1789,19 @@ function RatingButtons({ value, onChange, disabled, color }) {
     <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
       {[1, 2, 3, 4, 5, 0].map(v => {
         const on = value === v;
-        return <button key={v} type="button" disabled={disabled} title={RATING_LABEL[v]} onClick={() => onChange(v)}
-          style={{ minWidth: v === 0 ? 46 : 34, padding: '6px 8px', borderRadius: 6, border: on ? `2px solid ${color}` : '1px solid #cbd5e1', background: on ? `${color}18` : '#fff', color: on ? color : '#475569', fontWeight: 600, fontSize: 13, cursor: disabled ? 'default' : 'pointer' }}>{v === 0 ? 'N/A' : v}</button>;
+        return (
+          <button 
+            key={v} 
+            type="button" 
+            disabled={disabled} 
+            title={RATING_LABEL[v]} 
+            // N/A (0) ആക്ടീവ് ആയിരിക്കുമ്പോൾ വീണ്ടും ക്ലിക്ക് ചെയ്താൽ അത് ഓഫ് ആകും (undefined)
+            onClick={() => onChange(on && v === 0 ? undefined : v)}
+            style={{ minWidth: v === 0 ? 46 : 34, padding: '6px 8px', borderRadius: 6, border: on ? `2px solid ${color}` : '1px solid #cbd5e1', background: on ? `${color}18` : '#fff', color: on ? color : '#475569', fontWeight: 600, fontSize: 13, cursor: disabled ? 'default' : 'pointer' }}
+          >
+            {v === 0 ? 'N/A' : v}
+          </button>
+        );
       })}
     </div>
   );
