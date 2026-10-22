@@ -16,7 +16,6 @@ const domains = [
   { code: 'D7', name: 'Academic Leadership & Governance', weight: 10, color: '#4f46e5' }
 ];
 
-// Unwanted tabs & Special Points removed
 const nav = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
   { id: 'scores', label: 'Staff Leaderboard', icon: Award, roles: ['admin', 'coordinator', 'teacher', 'appraisal_authority'] },
@@ -521,13 +520,17 @@ function StaffDirectoryPage({ currentUserRole }) {
 }
 
 // ==========================================
-// 5. DUTIES & MONITORING (Recurring & Delete Added)
+// 5. DUTIES & MONITORING (With Bulk CCE & Start/End Dates)
 // ==========================================
 function DutyMonitoringPage({ userRole, profile }) {
   const [duties, setDuties] = useState([]);
   const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5, is_recurring: false });
+  const [form, setForm] = useState({ title: '', staff_id: '', start_date: '', end_date: '', domain_code: 'D3', marks: 5 });
   const [showForm, setShowForm] = useState(false);
+  
+  // Bulk CCE state
+  const [showBulkForm, setShowBulkForm] = useState(false);
+  const [bulkForm, setBulkForm] = useState({ title: 'CCE Work', staff_id: '', count: 4, end_date: '', marks: 2 });
 
   useEffect(() => {
     fetchDuties();
@@ -541,55 +544,54 @@ function DutyMonitoringPage({ userRole, profile }) {
     setDuties(data || []);
   }
 
-    async function handleAssign(e) {
+  async function handleAssign(e) {
     e.preventDefault();
     if (!form.title || !form.staff_id) return alert('Please fill all fields');
     
     const { error } = await supabase.from('duty_records').insert({ 
       title: form.title, 
       staff_id: form.staff_id, 
-      deadline: form.deadline || null, 
+      start_date: form.start_date || null,
+      end_date: form.end_date || null, 
       status: 'Pending',
       domain_code: form.domain_code,
-      marks: Number(form.marks),
-      is_recurring: form.is_recurring
+      marks: Number(form.marks)
     });
     
-    if (error) {
-      alert("Error assigning duty: " + error.message); // ഇത് എറർ കാണിക്കും
-      return;
-    }
-
+    if (error) return alert("Error: " + error.message);
+    
     alert('✅ Duty Assigned!'); 
-    setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5, is_recurring: false }); 
+    setForm({ title: '', staff_id: '', start_date: '', end_date: '', domain_code: 'D3', marks: 5 }); 
     setShowForm(false); 
     fetchDuties();
   }
 
-  async function markDone(duty) {
-    // Mark as completed
-    await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', duty.id);
-
-    // If it is a recurring duty, auto-generate next week's duty
-    if (duty.is_recurring) {
-      const nextWeekDate = new Date();
-      nextWeekDate.setDate(nextWeekDate.getDate() + 7);
-      
-      await supabase.from('duty_records').insert({
-        title: duty.title,
-        staff_id: duty.staff_id,
-        domain_code: duty.domain_code,
-        marks: duty.marks,
-        is_recurring: true,
+  // Bulk Generate Function (For CCE)
+  async function handleBulkAssign(e) {
+    e.preventDefault();
+    if (!bulkForm.staff_id || !bulkForm.title || !bulkForm.count) return alert('Fill all fields');
+    
+    const records = [];
+    for (let i = 1; i <= bulkForm.count; i++) {
+      records.push({
+        title: `${bulkForm.title} ${i}`,
+        staff_id: bulkForm.staff_id,
+        end_date: bulkForm.end_date || null,
         status: 'Pending',
-        deadline: nextWeekDate.toISOString().split('T')[0]
+        domain_code: 'D1', // Defaulting CCE to D1
+        marks: Number(bulkForm.marks)
       });
-      alert('✅ Duty Completed! Next week\'s recurring duty automatically generated.');
-    } else {
-      alert('✅ Duty Completed!');
     }
+
+    const { error } = await supabase.from('duty_records').insert(records);
+    if (error) return alert("Error: " + error.message);
+    
+    alert(`✅ ${bulkForm.count} CCE Works Assigned!`); 
+    setShowBulkForm(false); 
     fetchDuties();
   }
+
+  async function markDone(id) { await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', id); fetchDuties(); }
 
   async function deleteDuty(id) {
     if (userRole !== 'admin') return alert('Only admins can delete duties.');
@@ -604,9 +606,15 @@ function DutyMonitoringPage({ userRole, profile }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {(userRole === 'admin' || userRole === 'coordinator') && (
         <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-          <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, marginBottom: showForm ? 20 : 0 }}>
-            <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
-          </button>
+          
+          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+            <button onClick={() => { setShowForm(!showForm); setShowBulkForm(false); }} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
+            </button>
+            <button onClick={() => { setShowBulkForm(!showBulkForm); setShowForm(false); }} style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <ClipboardList size={18} /> {showBulkForm ? 'Cancel' : 'Bulk Assign CCE Works'}
+            </button>
+          </div>
           
           {showForm && (
             <form onSubmit={handleAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
@@ -630,16 +638,45 @@ function DutyMonitoringPage({ userRole, profile }) {
                 <input type="number" min="1" max="25" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
               
-              <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
-                <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
+              <label style={{ flex: '1 1 150px' }}>Start Date:<br/>
+                <input type="date" value={form.start_date} onChange={e => setForm({...form, start_date: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
               </label>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, height: 42, flex: '0 0 auto', background: '#f1f5f9', padding: '0 15px', borderRadius: 8, border: '1px solid #cbd5e1', cursor: 'pointer' }}>
-                <input type="checkbox" checked={form.is_recurring} onChange={e => setForm({...form, is_recurring: e.target.checked})} />
-                <span style={{ fontSize: 14, fontWeight: 'bold', color: '#475569' }}>Recurring Weekly</span>
+              <label style={{ flex: '1 1 150px' }}>End Date:<br/>
+                <input type="date" value={form.end_date} onChange={e => setForm({...form, end_date: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
               </label>
               
               <button type="submit" style={{ background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>Save</button>
+            </form>
+          )}
+
+          {showBulkForm && (
+            <form onSubmit={handleBulkAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, alignItems: 'flex-end', background: '#fdf4ff', padding: 15, borderRadius: 8, border: '1px solid #fae8ff' }}>
+              <div style={{ width: '100%', marginBottom: 5 }}><strong>Bulk Generate CCE Works</strong> (Assigns multiple D1 tasks at once)</div>
+              
+              <label style={{ flex: '1 1 200px' }}>Task Base Name:<br/>
+                <input value={bulkForm.title} onChange={e => setBulkForm({...bulkForm, title: e.target.value})} placeholder="e.g. CCE Work" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+              </label>
+              
+              <label style={{ flex: '1 1 150px' }}>Select Teacher:<br/>
+                <select value={bulkForm.staff_id} onChange={e => setBulkForm({...bulkForm, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
+                  <option value="">-- Select Teacher --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </select>
+              </label>
+
+              <label style={{ flex: '0 1 100px' }}>How Many?:<br/>
+                <input type="number" min="1" max="10" value={bulkForm.count} onChange={e => setBulkForm({...bulkForm, count: e.target.value })} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+              </label>
+              
+              <label style={{ flex: '0 1 100px' }}>Marks Each:<br/>
+                <input type="number" min="1" max="25" value={bulkForm.marks} onChange={e => setBulkForm({...bulkForm, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+              </label>
+
+              <label style={{ flex: '1 1 150px' }}>Deadline (End Date):<br/>
+                <input type="date" value={bulkForm.end_date} onChange={e => setBulkForm({...bulkForm, end_date: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+              </label>
+              
+              <button type="submit" style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>Generate</button>
             </form>
           )}
         </div>
@@ -649,26 +686,28 @@ function DutyMonitoringPage({ userRole, profile }) {
         <h3>Duty Records</h3>
         <div className="table-responsive">
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 600 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Duty & Domain</th><th style={{ padding: 12 }}>Deadline</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Duty & Domain</th><th style={{ padding: 12 }}>Dates</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
             <tbody>
               {duties.map(d => {
-                const isOverdue = d.deadline && d.deadline < today && d.status !== 'Completed';
+                const isOverdue = d.end_date && d.end_date < today && d.status !== 'Completed';
                 return (
                   <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9', background: isOverdue ? '#fef2f2' : 'transparent' }}>
                     <td style={{ padding: 12 }}>{d.profiles?.full_name}</td>
                     <td style={{ padding: 12 }}>
-                      <b>{d.title}</b> {d.is_recurring && <span style={{fontSize: 10, background: '#e0e7ff', color: '#3730a3', padding: '2px 6px', borderRadius: 10, marginLeft: 5}}>Recurring</span>}<br/>
+                      <b>{d.title}</b><br/>
                       <span style={{fontSize: 11, color: '#64748b'}}>{d.domain_code || 'No Domain'} (+{d.marks || 0} Marks)</span>
                     </td>
                     <td style={{ padding: 12, color: isOverdue ? '#ef4444' : 'inherit', fontWeight: isOverdue ? 'bold' : 'normal' }}>
-                      {d.deadline || '-'} {isOverdue && <AlertTriangle size={14} style={{ display: 'inline', marginLeft: 5 }} />}
+                      {d.start_date && <div style={{fontSize: 12}}>Start: {d.start_date}</div>}
+                      {d.end_date && <div style={{fontSize: 12}}>End: {d.end_date} {isOverdue && <AlertTriangle size={12} style={{ display: 'inline', marginLeft: 3 }} />}</div>}
+                      {!d.start_date && !d.end_date && '-'}
                     </td>
                     <td style={{ padding: 12 }}>
                       <span style={{ padding: '4px 8px', borderRadius: 12, background: d.status === 'Completed' ? '#dcfce7' : '#fef3c7', color: d.status === 'Completed' ? '#166534' : '#92400e', fontSize: 12 }}>{d.status}</span>
                     </td>
                     <td style={{ padding: 12, display: 'flex', gap: 8 }}>
                       {d.status !== 'Completed' && (
-                        <button onClick={() => markDone(d)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
+                        <button onClick={() => markDone(d.id)} style={{ padding: '6px 12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5 }}>
                           <Check size={14} /> Mark Done
                         </button>
                       )}
@@ -695,13 +734,16 @@ function DutyMonitoringPage({ userRole, profile }) {
 }
 
 // ==========================================
-// 6. SPECIAL TASKS & PROPOSALS
+// 6. SPECIAL TASKS & PROPOSALS (With File Upload for Teaching Plan)
 // ==========================================
 function SpecialTaskPage({ userRole, profile }) {
   const [tasks, setTasks] = useState([]);
   const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 });
+  const [form, setForm] = useState({ title: '', staff_id: '', domain_code: 'D7', marks: 5 });
   const [showForm, setShowForm] = useState(false);
+  const [file, setFile] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     fetchTasks();
@@ -719,19 +761,45 @@ function SpecialTaskPage({ userRole, profile }) {
     e.preventDefault();
     if (!form.title || !form.staff_id) return alert('Fill all fields');
     await supabase.from('special_tasks').insert({ 
-      title: form.title, staff_id: form.staff_id, deadline: form.deadline || null, 
+      title: form.title, staff_id: form.staff_id, 
       status: 'Pending', domain_code: form.domain_code, marks: Number(form.marks)
     });
-    alert('✅ Task Created!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
+    alert('✅ Task Created!'); setForm({ title: '', staff_id: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
   }
 
   async function handlePropose(e) {
     e.preventDefault();
     if (!form.title) return alert('Enter activity title');
+    setUploading(true);
+
+    let fileUrl = null;
+    if (file) {
+      const filePath = `${profile.id}/${Date.now()}_${file.name}`;
+      const { error: uploadError } = await supabase.storage.from('evidence').upload(filePath, file);
+      if (uploadError) {
+        alert("File upload failed: " + uploadError.message);
+        setUploading(false);
+        return;
+      }
+      const { data: urlData } = supabase.storage.from('evidence').getPublicUrl(filePath);
+      fileUrl = urlData.publicUrl;
+    }
+
+    // If it's a teaching plan, auto-approve and give D1 marks
+    const isTeachingPlan = form.title.toLowerCase().includes('teaching plan');
+    const status = isTeachingPlan ? 'Completed' : 'Proposed';
+    const domain = isTeachingPlan ? 'D1' : null;
+    const marks = isTeachingPlan ? 2 : 0;
+
     await supabase.from('special_tasks').insert({ 
-      title: form.title, staff_id: profile.id, status: 'Proposed'
+      title: form.title, staff_id: profile.id, status: status,
+      domain_code: domain, marks: marks, file_url: fileUrl
     });
-    alert('✅ Proposal Submitted for Approval!'); setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D7', marks: 5 }); setShowForm(false); fetchTasks();
+
+    setUploading(false);
+    alert(isTeachingPlan ? '✅ Teaching Plan Uploaded & Marks Auto-Added!' : '✅ Proposal Submitted!'); 
+    setForm({ title: '', staff_id: '', domain_code: 'D7', marks: 5 }); setFile(null); if(fileRef.current) fileRef.current.value = '';
+    setShowForm(false); fetchTasks();
   }
 
   async function approveProposal(task) {
@@ -756,13 +824,13 @@ function SpecialTaskPage({ userRole, profile }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
         <button onClick={() => setShowForm(!showForm)} style={{ background: isAdmin ? '#2563eb' : '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {isAdmin ? <Plus size={18} /> : <Send size={18} />} {showForm ? 'Cancel' : (isAdmin ? 'Create Special Task' : 'Propose New Activity')}
+          {isAdmin ? <Plus size={18} /> : <Send size={18} />} {showForm ? 'Cancel' : (isAdmin ? 'Create Special Task' : 'Propose Activity / Upload Teaching Plan')}
         </button>
         
         {showForm && (
           <form onSubmit={isAdmin ? handleCreate : handlePropose} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, marginTop: 20, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
-            <label style={{ flex: '1 1 200px' }}>Activity Title:<br/>
-              <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="Describe what you did..." style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+            <label style={{ flex: '1 1 200px' }}>Title:<br/>
+              <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder={isAdmin ? "Task name..." : "e.g. Monthly Teaching Plan"} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
             </label>
 
             {isAdmin && (
@@ -780,12 +848,17 @@ function SpecialTaskPage({ userRole, profile }) {
                 <label style={{ flex: '0 1 100px' }}>Marks:<br/>
                   <input type="number" min="1" max="10" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
                 </label>
-                <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
-                  <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
-                </label>
               </>
             )}
-            <button type="submit" style={{ background: isAdmin ? '#16a34a' : '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>{isAdmin ? 'Save' : 'Submit for Approval'}</button>
+
+            {!isAdmin && (
+              <label style={{ flex: '1 1 250px' }}>Upload File (Optional):<br/>
+                <input type="file" ref={fileRef} onChange={e => setFile(e.target.files[0])} style={{ width: '100%', padding: 8, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box', background: '#fff' }} />
+                <div style={{ fontSize: 11, color: '#64748b', marginTop: 3 }}>If title contains "Teaching Plan", marks auto-add to D1.</div>
+              </label>
+            )}
+
+            <button type="submit" disabled={uploading} style={{ background: isAdmin ? '#16a34a' : '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>{uploading ? 'Uploading...' : (isAdmin ? 'Save' : 'Submit')}</button>
           </form>
         )}
       </div>
@@ -794,13 +867,13 @@ function SpecialTaskPage({ userRole, profile }) {
         <h3>Special Tasks & Proposals</h3>
         <div className="table-responsive">
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', marginTop: 15, minWidth: 700 }}>
-            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Activity & Domain</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
+            <thead><tr style={{ borderBottom: '2px solid #e2e8f0' }}><th style={{ padding: 12 }}>Staff</th><th style={{ padding: 12 }}>Title & Domain</th><th style={{ padding: 12 }}>Status</th><th style={{ padding: 12 }}>Action</th></tr></thead>
             <tbody>
               {tasks.map(t => (
                 <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9', background: t.status === 'Proposed' ? '#fdf4ff' : 'transparent' }}>
                   <td style={{ padding: 12 }}>{t.profiles?.full_name}</td>
                   <td style={{ padding: 12 }}>
-                    <b>{t.title}</b><br/>
+                    <b>{t.title}</b> {t.file_url && <a href={t.file_url} target="_blank" rel="noreferrer" style={{fontSize:12, color:'#2563eb', marginLeft:5}}>View File</a>}<br/>
                     {t.domain_code && <span style={{fontSize: 11, color: '#64748b'}}>{t.domain_code} (+{t.marks || 0} Marks)</span>}
                   </td>
                   <td style={{ padding: 12 }}>
@@ -875,8 +948,8 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
 
     const today = new Date().toISOString().split('T')[0];
     Promise.all([
-      supabase.from('duty_records').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').lt('deadline', today),
-      supabase.from('special_tasks').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').neq('status', 'Proposed').lt('deadline', today)
+      supabase.from('duty_records').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').lt('end_date', today),
+      supabase.from('special_tasks').select('id').eq('staff_id', selectedStaff).neq('status', 'Completed').neq('status', 'Proposed')
     ]).then(([dutiesRes, tasksRes]) => {
       const overdueCount = (dutiesRes.data?.length || 0) + (tasksRes.data?.length || 0);
       setPenalty({ count: overdueCount, marks: overdueCount * 2 });
@@ -979,7 +1052,7 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
                       <span>Manual:</span> <span>{manualMark.toFixed(1)}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: autoMark > 0 ? '#16a34a' : '#94a3b8', fontWeight: 'bold', marginBottom: 4 }}>
-                      <span>Auto (Duties):</span> <span>+{autoMark}</span>
+                      <span>Auto (Tasks):</span> <span>+{autoMark}</span>
                     </div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 16, fontWeight: 'bold', color: d.color, borderTop: '1px solid #cbd5e1', paddingTop: 4 }}>
                       <span>Total:</span> <span>{domainTotal.toFixed(1)}</span>
