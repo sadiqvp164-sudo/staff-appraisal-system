@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   ArrowUpRight, Award, CalendarDays, CheckCircle2, ChevronDown, ClipboardList, 
   FileCheck2, FileText, GraduationCap, LayoutDashboard, LogOut, Menu, Plus, 
-  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Medal, Send, ThumbsUp, RotateCw
+  Search, ShieldCheck, Users, X, Upload, Check, Download, Target, Settings, Key, AlertTriangle, Edit, Trash2, Camera, Medal, Send, ThumbsUp
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -522,15 +522,13 @@ function StaffDirectoryPage({ currentUserRole }) {
 }
 
 // ==========================================
-// 5. DUTIES & MONITORING (True Weekly Logic)
+// 5. DUTIES & MONITORING (Manual Assign with Domain & Marks)
 // ==========================================
 function DutyMonitoringPage({ userRole, profile }) {
   const [duties, setDuties] = useState([]);
   const [staffList, setStaffList] = useState([]);
-  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 });
+  const [form, setForm] = useState({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5 });
   const [showForm, setShowForm] = useState(false);
-  const [assignToAll, setAssignToAll] = useState(false);
-  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     fetchDuties();
@@ -546,64 +544,21 @@ function DutyMonitoringPage({ userRole, profile }) {
 
   async function handleAssign(e) {
     e.preventDefault();
-    if (!form.title || (!form.staff_id && !assignToAll)) return alert('Fill all fields');
+    if (!form.title || !form.staff_id) return alert('Please fill all fields');
     
-    if (assignToAll) {
-      const rows = staffList.map(s => ({ 
-        title: form.title, staff_id: s.id, deadline: form.deadline || null, status: 'Pending',
-        domain_code: form.domain_code, marks: Number(form.marks)
-      }));
-      await supabase.from('duty_records').insert(rows);
-    } else {
-      await supabase.from('duty_records').insert({ 
-        title: form.title, staff_id: form.staff_id, deadline: form.deadline || null, status: 'Pending',
-        domain_code: form.domain_code, marks: Number(form.marks)
-      });
-    }
+    await supabase.from('duty_records').insert({ 
+      title: form.title, 
+      staff_id: form.staff_id, 
+      deadline: form.deadline || null, 
+      status: 'Pending',
+      domain_code: form.domain_code,
+      marks: Number(form.marks)
+    });
     
     alert('✅ Duty Assigned!'); 
-    setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D1', marks: 5 }); 
-    setAssignToAll(false); setShowForm(false); fetchDuties();
-  }
-
-  async function generateWeeklyDuties() {
-    setGenerating(true);
-    const title = "Weekly Cleaning Check"; // നിങ്ങൾ ആവശ്യപ്പെട്ട ഡ്യൂട്ടി
-    
-    // ഈ ആഴ്ച ഡ്യൂട്ടി നേരത്തെ ഉണ്ടോ എന്ന് ചെക്ക് ചെയ്യുന്നു (അവസാന 7 ദിവസത്തിനുള്ളിൽ)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    const { data: existing } = await supabase
-      .from('duty_records')
-      .select('id')
-      .eq('title', title)
-      .gte('created_at', sevenDaysAgo.toISOString());
-
-    if (existing && existing.length > 0) {
-      alert("⚠️ Weekly duties for this week have already been generated!");
-      setGenerating(false);
-      return;
-    }
-
-    // എല്ലാ സ്റ്റാഫിനും ഡ്യൂട്ടി ഉണ്ടാക്കുന്നു (D3, 2 Marks)
-    const rows = staffList.map(s => ({ 
-      title: title, 
-      staff_id: s.id, 
-      deadline: null, 
-      status: 'Pending',
-      domain_code: 'D3', // Campus Engagement
-      marks: 2
-    }));
-    
-    const { error } = await supabase.from('duty_records').insert(rows);
-    setGenerating(false);
-
-    if (error) alert(error.message);
-    else {
-      alert('✅ Weekly Cleaning Check Duties Generated for ALL staff!');
-      fetchDuties();
-    }
+    setForm({ title: '', staff_id: '', deadline: '', domain_code: 'D3', marks: 5 }); 
+    setShowForm(false); 
+    fetchDuties();
   }
 
   async function markDone(id) { await supabase.from('duty_records').update({ status: 'Completed' }).eq('id', id); fetchDuties(); }
@@ -614,31 +569,20 @@ function DutyMonitoringPage({ userRole, profile }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
       {(userRole === 'admin' || userRole === 'coordinator') && (
         <div style={{ background: '#fff', padding: 20, borderRadius: 12, border: '1px solid #e2e8f0' }}>
-          <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
-            <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
-            </button>
-            <button onClick={generateWeeklyDuties} disabled={generating} style={{ background: '#8b5cf6', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <RotateCw size={18} /> {generating ? 'Generating...' : 'Auto-Generate Weekly Cleaning'}
-            </button>
-          </div>
+          <button onClick={() => setShowForm(!showForm)} style={{ background: '#2563eb', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, marginBottom: showForm ? 20 : 0 }}>
+            <Plus size={18} /> {showForm ? 'Cancel' : 'Assign New Duty'}
+          </button>
           
           {showForm && (
             <form onSubmit={handleAssign} style={{ display: 'flex', flexWrap: 'wrap', gap: 15, alignItems: 'flex-end', background: '#f8fafc', padding: 15, borderRadius: 8 }}>
               <label style={{ flex: '1 1 200px' }}>Duty Title:<br/>
-                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Exam Duty" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+                <input value={form.title} onChange={e => setForm({...form, title: e.target.value})} placeholder="e.g. Weekly Cleaning" style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
               
-              <label style={{ flex: '1 1 200px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 5 }}>
-                  <input type="checkbox" checked={assignToAll} onChange={e => setAssignToAll(e.target.checked)} /> 
-                  <span style={{ fontWeight: 'bold', color: '#2563eb' }}>Assign to All Staff</span>
-                </div>
-                {!assignToAll && (
-                  <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required={!assignToAll}>
-                    <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
-                  </select>
-                )}
+              <label style={{ flex: '1 1 150px' }}>Assign To Staff:<br/>
+                <select value={form.staff_id} onChange={e => setForm({...form, staff_id: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required>
+                  <option value="">-- Select Staff --</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}
+                </select>
               </label>
 
               <label style={{ flex: '1 1 200px' }}>Link to Domain:<br/>
@@ -646,17 +590,21 @@ function DutyMonitoringPage({ userRole, profile }) {
                   {domains.map(d => <option key={d.code} value={d.code}>{d.code} - {d.name}</option>)}
                 </select>
               </label>
+              
               <label style={{ flex: '0 1 100px' }}>Marks:<br/>
-                <input type="number" min="1" max="10" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
+                <input type="number" min="1" max="25" value={form.marks} onChange={e => setForm({...form, marks: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} required />
               </label>
+              
               <label style={{ flex: '1 1 150px' }}>Deadline:<br/>
                 <input type="date" value={form.deadline} onChange={e => setForm({...form, deadline: e.target.value})} style={{ width: '100%', padding: 10, marginTop: 5, border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
               </label>
+              
               <button type="submit" style={{ background: '#16a34a', color: '#fff', padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', height: 42, flex: '0 0 auto' }}>Save</button>
             </form>
           )}
         </div>
       )}
+      
       <div style={{ background: '#fff', borderRadius: 12, padding: 20, border: '1px solid #e2e8f0' }}>
         <h3>Duty Records</h3>
         <div className="table-responsive">
@@ -904,11 +852,10 @@ function SevenDomainAppraisalPage({ userRole, profile }) {
 
   }, [selectedStaff]);
 
-  // ഇവിടെയാണ് വെയ്റ്റേജ് പ്രകാരമുള്ള കണക്കുകൂട്ടൽ നടക്കുന്നത്
   const calculateDomainTotal = (domainCode, weight) => {
     const manualScore = ((ratings[domainCode] || 0) / 5) * weight;
     const autoScore = autoMarks[domainCode] || 0;
-    return Math.min(weight, manualScore + autoScore); // ഡൊമെയ്നിന്റെ പരമാവധി വെയ്റ്റിൽ കൂടുതൽ പോകില്ല
+    return Math.min(weight, manualScore + autoScore); 
   };
 
   const grandTotal = domains.reduce((sum, d) => sum + calculateDomainTotal(d.code, d.weight), 0);
