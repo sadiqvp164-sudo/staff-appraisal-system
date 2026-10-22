@@ -12,8 +12,8 @@ import { isSupabaseConfigured, supabase } from './lib/supabase';
 const CYCLE = '2026-2027';
 const WORK_SHARE = 0.5; // when a sub-domain has BOTH a rating and work records: 50% work + 50% rating
 const MAX_SUBJECTS = 10;
-const BONUS_SUB = 'AL6'; // approved bonus points feed this sub-domain of D7
-const BONUS_CAP = 10;    // approved bonus points needed for FULL marks in AL6
+const BONUS_SUB = 'AL6'; // default bonus sub-domain
+const BONUS_CAP = 10;    // approved bonus points needed for FULL marks in the selected sub-domain
 
 const RAW_DOMAINS = [
   { code: 'D1', name: 'Teaching, Learning & Learner Achievement', weight: 25, color: '#2563eb', subs: [
@@ -43,7 +43,6 @@ const SUBS = domains.flatMap(d => d.subs);
 const SUB = Object.fromEntries(SUBS.map(s => [s.code, s]));
 const RATING_LABEL = { 5: 'Exceptional', 4: 'Strong', 3: 'Expected', 2: 'Developing', 1: 'Unsatisfactory', 0: 'Not applicable' };
 
-// the three kinds of work stored in `work_items`
 const KINDS = {
   cce: { label: 'CCE Works', one: 'CCE', def: 'T5' },
   midterm: { label: 'Midterm Exams', one: 'Midterm', def: 'T5' },
@@ -84,15 +83,10 @@ function downloadCSV(filename, headers, rows) {
   URL.revokeObjectURL(url);
 }
 
-// ------------------------------------------------------------------
-// WORK -> per sub-domain {assigned, earned}
-// A work item counts only when it is Completed OR its due date has passed.
-// (Work that is not yet due and not done is NOT counted against the staff member.)
-// ------------------------------------------------------------------
 function workMap(items, today = todayStr()) {
   const m = {};
   items.forEach(i => {
-    if (!i.sub_code || i.status === 'Submitted') return; // awaiting approval: not counted yet
+    if (!i.sub_code || i.status === 'Submitted') return; 
     const done = i.status === 'Completed';
     const pastDue = i.due_date && i.due_date < today;
     if (!done && !pastDue) return;
@@ -104,22 +98,24 @@ function workMap(items, today = todayStr()) {
   return m;
 }
 
-// Approved bonus points -> work for sub-domain AL6 (BONUS_CAP approved points = full marks)
 function withBonus(wm, entries) {
-  const pts = (entries || []).filter(e => e.status === 'Approved').reduce((a, e) => a + (Number(e.points_approved) || 0), 0);
-  if (pts <= 0) return wm;
-  return { ...wm, [BONUS_SUB]: { assigned: BONUS_CAP, earned: Math.min(BONUS_CAP, pts), n: 1, done: 1, bonus: pts } };
+  const newWm = { ...wm };
+  (entries || []).filter(e => e.status === 'Approved').forEach(e => {
+    const sub = e.sub_code || BONUS_SUB;
+    const pts = Number(e.points_approved) || 0;
+    if (pts <= 0) return;
+
+    if (!newWm[sub]) newWm[sub] = { assigned: BONUS_CAP, earned: 0, n: 0, done: 0, bonus: 0 };
+    
+    newWm[sub].assigned = Math.max(newWm[sub].assigned, BONUS_CAP);
+    newWm[sub].earned = Math.min(newWm[sub].assigned, newWm[sub].earned + pts);
+    newWm[sub].bonus = (newWm[sub].bonus || 0) + pts;
+    newWm[sub].n += 1;
+    newWm[sub].done += 1;
+  });
+  return newWm;
 }
 
-// ------------------------------------------------------------------
-// SCORING (same function everywhere)
-// ratings[sub] : 1..5 rating, 0 = N/A, undefined = not rated
-// work[sub]    : {assigned, earned}
-// Per sub-domain:  rating% = rating/5 ; work% = earned/assigned
-//   both present -> WORK_SHARE*work% + (1-WORK_SHARE)*rating% ; one present -> that one ; none -> N/A (excluded)
-// Per domain: sum of applicable sub-domain marks, re-scaled to the domain weight (N/A sub-domains do not reduce marks)
-// Total: applicable domains re-scaled to 100 (a domain that does not apply to the staff member does not reduce marks)
-// ------------------------------------------------------------------
 function computeScores(ratings, work) {
   const subs = {}; const per = {}; let sum = 0, w = 0;
   domains.forEach(d => {
@@ -961,7 +957,7 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
                 <div style={{ display: 'flex', gap: 6 }}>
                   <button title="View profile" onClick={() => setView(s)} style={S.icon()}><Eye size={14} /></button>
                   {isAdmin && <button title="Edit" onClick={() => setEdit(s)} style={S.icon()}><Edit size={14} /></button>}
-                  {isAdmin && <button title="Set password" onClick={() => setPwFor({ s, value: '', busy: false })} style={S.icon()}><KeyRound size={14} /></button>}
+                  {isAdmin && <button title="Set password" onClick={() => setPwFor({ s, value: '', busy: false })} style={{ ...S.sm('#f59e0b'), display: 'inline-flex', alignItems: 'center', gap: 4 }}><KeyRound size={14} /> Password</button>}
                   {isAdmin && <button onClick={() => toggleActive(s)} style={S.sm(s.active === false ? '#16a34a' : '#ef4444')}>{s.active === false ? 'Activate' : 'Deactivate'}</button>}
                 </div>
               </td>
@@ -1015,8 +1011,6 @@ function StaffProfileModal({ s, onClose }) {
 
 // ==========================================
 // WORK: CCE, MIDTERM EXAMS, LESSON PLANS, WEEKLY DUTIES, SPECIAL TASKS, SUBJECTS
-// Every work item belongs to a sub-domain (and so to a domain) and feeds the appraisal marks.
-// Deadline rule: work finished after its deadline earns only `late_pct` % of its points (default 50%).
 // ==========================================
 const roundTo = (n) => Math.round(n * 100) / 100;
 const doneOn = (r) => r.submitted_on || todayStr();
@@ -1069,7 +1063,6 @@ function WorkPage({ userRole, profile }) {
   );
 }
 
-// ---- Subjects: which subjects each teacher has, and whether each has CCE and/or a midterm exam ----
 const flagBtn = (on, c) => ({ border: 'none', borderRadius: 8, padding: '1px 6px', fontSize: 10, fontWeight: 700, cursor: 'pointer', marginLeft: 4, background: on ? c : '#e2e8f0', color: on ? '#fff' : '#64748b' });
 
 function SubjectsTab({ staffList }) {
@@ -1196,7 +1189,6 @@ function BulkSubjectModal({ staffList, subs, onClose, onDone }) {
   );
 }
 
-// ---- One table for every kind of work ----
 function WorkTable({ kind, userRole, profile, staffList }) {
   const K = KINDS[kind];
   const isTeacher = userRole === 'teacher';
@@ -1212,7 +1204,6 @@ function WorkTable({ kind, userRole, profile, staffList }) {
   const today = todayStr();
 
   const load = async () => {
-    // FIX: work_items has two foreign keys to profiles (staff_id, created_by) -> name the one to embed
     let query = supabase.from('work_items').select('*, profiles!staff_id(full_name)').eq('cycle', CYCLE).eq('kind', kind).order('due_date', { ascending: false }).order('created_at', { ascending: false });
     if (isTeacher) query = query.eq('staff_id', profile.id);
     const { data, error } = await query;
@@ -1379,7 +1370,6 @@ function WorkTable({ kind, userRole, profile, staffList }) {
   );
 }
 
-// ---- Generate CCE (per subject, monthly) / Midterm (per subject, per exam) / Lesson plan (per teacher, monthly) ----
 function GenerateModal({ kind, staffList, profile, onClose, onDone }) {
   const { toast } = useUI();
   const K = KINDS[kind];
@@ -1498,7 +1488,6 @@ function GenerateModal({ kind, staffList, profile, onClose, onDone }) {
   );
 }
 
-// ---- Bulk assignment (weekly duties and special tasks) ----
 function AssignModal({ kind, staffList, profile, onClose, onDone }) {
   const { toast } = useUI();
   const K = KINDS[kind];
@@ -1576,7 +1565,7 @@ function BonusPointsPage({ userRole, profile }) {
     e.preventDefault();
     const pts = Number(form.points);
     if (!(pts > 0)) return toast('Enter points greater than 0.', 'error');
-    const base = { title: form.title.trim(), reason: form.reason };
+    const base = { title: form.title.trim(), reason: form.reason, sub_code: form.sub_code, domain_code: SUB[form.sub_code].domain };
     const payload = mode === 'award'
       ? { ...base, staff_id: form.staff_id, points_requested: pts, points_approved: pts, status: 'Approved' }
       : { ...base, staff_id: profile.id, points_requested: pts, points_approved: 0, status: 'Pending' };
@@ -1610,11 +1599,11 @@ function BonusPointsPage({ userRole, profile }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <div style={{ ...S.card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
-        <div style={{ color: '#64748b', fontSize: 14, maxWidth: 520 }}>Approved bonus points count towards D7 – AL6 (Bonus Points & Special Achievements) in the appraisal. {BONUS_CAP} approved points = full marks for that sub-domain.</div>
+        <div style={{ color: '#64748b', fontSize: 14, maxWidth: 520 }}>Approved bonus points count towards the selected sub-domain. {BONUS_CAP} approved points = full marks for that sub-domain.</div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <select value={statusF} onChange={e => setStatusF(e.target.value)} style={S.input}><option value="all">All</option><option>Pending</option><option>Approved</option><option>Rejected</option></select>
-          <button onClick={() => { setMode('request'); setForm({ title: '', reason: '', points: '', staff_id: '' }); }} style={S.btn('#2563eb')}><Plus size={16} /> Request Points</button>
-          {reviewer && <button onClick={() => { setMode('award'); setForm({ title: '', reason: '', points: '', staff_id: '' }); }} style={S.btn('#16a34a')}><Gift size={16} /> Award Points</button>}
+          <button onClick={() => { setMode('request'); setForm({ title: '', reason: '', points: '', staff_id: '', sub_code: BONUS_SUB }); }} style={S.btn('#2563eb')}><Plus size={16} /> Request Points</button>
+          {reviewer && <button onClick={() => { setMode('award'); setForm({ title: '', reason: '', points: '', staff_id: '', sub_code: BONUS_SUB }); }} style={S.btn('#16a34a')}><Gift size={16} /> Award Points</button>}
         </div>
       </div>
 
@@ -1623,6 +1612,9 @@ function BonusPointsPage({ userRole, profile }) {
           <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {mode === 'award' && <select required value={form.staff_id} onChange={e => setForm({ ...form, staff_id: e.target.value })} style={S.input}><option value="">Select Staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>}
             <input required placeholder="Achievement / title" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} style={S.input} />
+            <label style={{ fontSize: 14 }}>Counts towards sub-domain
+              <SubSelect value={form.sub_code} onChange={v => setForm({ ...form, sub_code: v })} style={{ ...S.input, width: '100%', marginTop: 5 }} />
+            </label>
             <input required type="number" min="0" step="0.5" placeholder="Points" value={form.points} onChange={e => setForm({ ...form, points: e.target.value })} style={S.input} />
             <textarea placeholder="Details / justification" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} style={{ ...S.input, minHeight: 70 }} />
             <button type="submit" style={S.btn('#2563eb', { justifyContent: 'center' })}>{mode === 'award' ? 'Award' : 'Submit request'}</button>
@@ -1632,11 +1624,12 @@ function BonusPointsPage({ userRole, profile }) {
 
       <div style={S.card}>
         {shown.length === 0 ? <Empty text="No bonus entries." /> : (
-          <Table heads={['Staff', 'Title', 'Requested', 'Approved', 'Status', 'Action']} min={760}>
+          <Table heads={['Staff', 'Title', 'Sub-domain', 'Requested', 'Approved', 'Status', 'Action']} min={760}>
             {shown.map(r => (
               <tr key={r.id} style={S.row}>
                 <td style={S.td}>{map[r.staff_id]?.full_name || '-'}</td>
                 <td style={S.td}>{r.title || '-'}{r.reason && <div style={{ fontSize: 12, color: '#64748b' }}>{r.reason}</div>}</td>
+                <td style={S.td}><span style={{ background: SUB[r.sub_code]?.color || '#64748b', color: '#fff', borderRadius: 10, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>{r.sub_code || BONUS_SUB}</span></td>
                 <td style={S.td}>{r.points_requested ?? '-'}</td>
                 <td style={{ ...S.td, fontWeight: 700, color: '#ea580c' }}>{r.status === 'Approved' ? `+${r.points_approved}` : '-'}</td>
                 <td style={S.td}><Badge text={r.status} />{r.reviewer_remarks && <div style={{ fontSize: 11, color: '#ef4444' }}>{r.reviewer_remarks}</div>}</td>
@@ -1660,8 +1653,6 @@ function BonusPointsPage({ userRole, profile }) {
 
 // ==========================================
 // APPRAISAL WORKFLOW
-// Done by the Principal (appraisal authority) and Admin only. Teachers/coordinators can only view.
-// Draft (ratings being entered) -> Finalised (Approved & locked). Teachers see ratings only after it is finalised.
 // ==========================================
 function RatingButtons({ value, onChange, disabled, color }) {
   return (
@@ -1696,7 +1687,7 @@ function AppraisalPage({ userRole, profile }) {
   const isRater = userRole === 'admin' || (userRole === 'appraisal_authority' && !isSelf);
   const locked = status === 'Approved';
   const canRate = isRater && !locked;
-  const hideDraft = !isRater && !locked; // staff/coordinator see nothing of an unfinished appraisal's ratings
+  const hideDraft = !isRater && !locked; 
 
   useEffect(() => {
     if (!selected) return;
@@ -1704,7 +1695,7 @@ function AppraisalPage({ userRole, profile }) {
       const [{ data: a }, { data: w }, { data: b }] = await Promise.all([
         supabase.from('appraisals').select('*, appraisal_sub_ratings(*)').eq('staff_id', selected).eq('cycle', CYCLE).maybeSingle(),
         supabase.from('work_items').select('*').eq('staff_id', selected).eq('cycle', CYCLE),
-        supabase.from('special_point_entries').select('status, points_approved').eq('staff_id', selected)
+        supabase.from('special_point_entries').select('status, points_approved, sub_code').eq('staff_id', selected)
       ]);
       setItems(w || []); setBonusRows(b || []);
       const R = {}, C = {};
@@ -1813,10 +1804,10 @@ function AppraisalPage({ userRole, profile }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 15 }}>
             <div className="no-print" style={{ ...S.card, background: '#f8fafc', fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
               {isRater
-                ? <><b>How marks are calculated.</b> The Principal/Admin gives a rating (1–5, or N/A) to each sub-domain. Work done by the staff member (CCE, midterm, lesson plans, duties, tasks) is added automatically.
+                ? <><b>How marks are calculated.</b> The Principal/Admin gives a rating (1–5, or N/A) to each sub-domain. Work done by the staff member (CCE, midterm, lesson plans, duties, tasks, bonus) is added automatically.
                     If a sub-domain has both, they are averaged ({Math.round(WORK_SHARE * 100)}% work / {Math.round((1 - WORK_SHARE) * 100)}% rating); if only one exists, that one is used.
                     A sub-domain or domain with neither (or rated N/A) is <b>excluded</b> and the total is re-scaled to 100, so staff are not penalised for areas that do not apply to them.</>
-                : <>Your appraisal is evaluated by the Principal/Admin. Work you complete (CCE, midterm, lesson plans, duties, tasks) is counted automatically. Ratings and remarks appear here once the appraisal is finalised.</>}
+                : <>Your appraisal is evaluated by the Principal/Admin. Work you complete (CCE, midterm, lesson plans, duties, tasks, bonus) is counted automatically. Ratings and remarks appear here once the appraisal is finalised.</>}
             </div>
 
             {domains.map(d => {
@@ -1914,7 +1905,7 @@ function ReportsPage() {
       const [ap, wk, bp] = await Promise.all([
         supabase.from('appraisals').select('staff_id, status, final_score, appraisal_sub_ratings(sub_code, rating)').eq('cycle', CYCLE),
         supabase.from('work_items').select('staff_id, kind, status, due_date, month, sub_code, marks, awarded, submitted_on').eq('cycle', CYCLE),
-        supabase.from('special_point_entries').select('staff_id, status, points_approved')
+        supabase.from('special_point_entries').select('staff_id, status, points_approved, sub_code')
       ]);
       setRaw({ ap: ap.data || [], wk: wk.data || [], bp: bp.data || [] });
     })();
@@ -1946,7 +1937,6 @@ function ReportsPage() {
   const exportTrack = () => downloadCSV(`${tkind}_tracker.csv`, ['Staff', 'Department', 'Total', 'Completed', 'Submitted', 'Pending', 'Overdue', 'Finished late'], trackRows.map(r => [r.s.full_name, r.s.department, r.total, r.done, r.sub, r.pend, r.overdue, r.late]));
 
   async function exportWork() {
-    // FIX: name the foreign key (staff_id) to avoid the "more than one relationship" error
     const { data, error } = await supabase.from('work_items').select('*, profiles!staff_id(full_name)').eq('cycle', CYCLE);
     if (error) return toast(error.message, 'error');
     downloadCSV(`Work_${todayStr()}.csv`, ['Staff', 'Type', 'Title', 'Subject', 'Month', 'Exam', 'Sub-domain', 'Points', 'Awarded', 'Deadline', 'Submitted on', 'Status'],
