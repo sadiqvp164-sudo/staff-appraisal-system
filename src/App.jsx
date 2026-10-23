@@ -119,34 +119,29 @@ function withBonus(wm, entries) {
 // Marks calculation with extra points for over-performing
 function computeScores(ratings, work) {
   const subs = {}; const per = {}; let sum = 0, max = 0;
-  let totalExtraPoints = 0; 
+  let totalExtraPoints = 0;
 
   domains.forEach(d => {
     let dEarn = 0, dExcluded = 0;
-    
+
     d.subs.forEach(s => {
       const r = ratings[s.code]; const wk = work[s.code];
       const rp = r >= 1 ? r / 5 : null;
-      
+
       let wp = null;
       let extraPoints = 0;
 
       if (wk && wk.assigned > 0) {
         wp = Math.min(1, wk.earned / wk.assigned);
-        
-        // ---- പുതിയ ലോജിക് ----
-        // ഫുൾ മാർക്ക് (100%) കിട്ടിയാൽ മാത്രം, അതിൽ കൂടുതലുള്ള ജോലികൾക്ക് എക്സ്ട്രാ പോയിന്റ് നൽകുക.
-        // wk.done > 1 എന്നത് കൊണ്ട് അർത്ഥമാക്കുന്നത്, ആദ്യത്തെ ജോലി ബേസ് സ്കോറിന് നൽകി, ബാക്കിയുള്ളവയ്ക്ക് എക്സ്ട്രാ നൽകുന്നു.
+        // Full marks (100%) reached: every work beyond the first gives 2 extra points
         if (wk.earned >= wk.assigned && wk.done > 1) {
-          const extraWorks = wk.done - 1; // ആദ്യത്തെ 1 എണ്ണം കഴിഞ്ഞുള്ളത്
-          extraPoints = extraWorks * 2; 
+          extraPoints = (wk.done - 1) * 2;
           totalExtraPoints += extraPoints;
         }
       } else if (wk && wk.earned > 0) {
-        wp = 1; 
+        wp = 1;
         if (wk.done > 1) {
-          const extraWorks = wk.done - 1;
-          extraPoints = extraWorks * 2;
+          extraPoints = (wk.done - 1) * 2;
           totalExtraPoints += extraPoints;
         }
       }
@@ -156,16 +151,16 @@ function computeScores(ratings, work) {
         dExcluded += s.weight;
         return;
       }
-      
+
       let pct = 0;
       if (rp !== null && wp !== null) pct = WORK_SHARE * wp + (1 - WORK_SHARE) * rp;
       else if (wp !== null) pct = wp;
       else if (rp !== null) pct = rp;
-      
+
       subs[s.code] = { na: false, score: pct * s.weight, pct, rp, wp, extraPoints };
       dEarn += pct * s.weight;
     });
-    
+
     const dMax = Math.max(0, d.weight - dExcluded);
     if (!dMax) {
       per[d.code] = { na: true, score: 0, max: 0 };
@@ -177,7 +172,7 @@ function computeScores(ratings, work) {
   });
 
   const baseScore = max ? (sum / max) * 100 : 0;
-  const finalTotal = Math.min(100, baseScore + totalExtraPoints); 
+  const finalTotal = Math.min(100, baseScore + totalExtraPoints);
 
   return { subs, per, total: finalTotal, baseScore, totalExtraPoints };
 }
@@ -742,46 +737,144 @@ function PodiumCard({ p, place, onClick }) {
       <div style={{ fontWeight: 'bold', fontSize: c.name, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.full_name}</div>
       <div style={{ fontSize: c.score, fontWeight: 'bold', color: '#2563eb', marginTop: 10 }}>{p.officialScore.toFixed(1)}</div>
       {p.bonus > 0 && <div style={{ fontSize: 13, color: '#ea580c', fontWeight: 'bold' }}>+{p.bonus} Bonus</div>}
+      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>Tap to see how points were earned</div>
     </div>
   );
 }
 
+// Shows, for one staff member, exactly which works / bonus entries gave the points
 function ScoreBreakdownModal({ staff, onClose }) {
-  const { breakdown } = staff;
-  if (!breakdown) return null;
+  const bd = staff.breakdown || {};
+  const perDomain = bd.per || {};
+  const perSub = bd.subs || {};
+  const [works, setWorks] = useState(null);
+  const [bonus, setBonus] = useState(null);
+  const [err, setErr] = useState('');
+  const [openD, setOpenD] = useState(null);
+  const today = todayStr();
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const [w, b] = await Promise.all([
+        supabase.rpc('leaderboard_staff_works', { p_staff: staff.id, p_cycle: CYCLE }),
+        supabase.rpc('leaderboard_staff_bonus', { p_staff: staff.id })
+      ]);
+      if (!alive) return;
+      if (w.error || b.error) setErr('Work details need the database functions. Run setup_leaderboard_details.sql once in Supabase → SQL Editor.');
+      setWorks(Array.isArray(w.data) ? w.data : []);
+      setBonus(Array.isArray(b.data) ? b.data : []);
+    })();
+    return () => { alive = false; };
+  }, [staff.id]);
+
+  const info = (i) => {
+    const max = Number(i.marks) || 0;
+    if (i.status === 'Completed') {
+      const got = Math.min(max, Number(i.awarded ?? i.marks) || 0);
+      const late = !!(i.due_date && i.submitted_on && i.submitted_on > i.due_date);
+      return { got, max, label: late ? 'Completed (late)' : 'Completed', tone: late ? 'amber' : 'green' };
+    }
+    if (i.status === 'Submitted') return { got: null, max, label: 'Waiting for approval', tone: 'purple' };
+    if (i.due_date && i.due_date < today) return { got: 0, max, label: 'Overdue – 0 pts', tone: 'red' };
+    return { got: null, max, label: 'Not due yet', tone: 'gray' };
+  };
+
+  const worksBySub = {}; (works || []).forEach(i => { if (i.sub_code) (worksBySub[i.sub_code] = worksBySub[i.sub_code] || []).push(i); });
+  const bonusBySub = {}; (bonus || []).forEach(i => { const k = i.sub_code || BONUS_SUB; (bonusBySub[k] = bonusBySub[k] || []).push(i); });
+
+  const doneCount = (works || []).filter(i => i.status === 'Completed').length;
+  const bonusTotal = (bonus || []).reduce((a, b) => a + (Number(b.points_approved) || 0), 0);
+  const chip = (tone, text) => { const [bg, fg] = TONES[tone]; return <span style={{ background: bg, color: fg, borderRadius: 10, padding: '2px 8px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>{text}</span>; };
+  const box = (bg, bd, lc, vc, label, value) => (
+    <div style={{ padding: 14, background: bg, borderRadius: 8, textAlign: 'center', border: `1px solid ${bd}` }}>
+      <div style={{ fontSize: 11, color: lc, textTransform: 'uppercase', fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 'bold', color: vc }}>{value}</div>
+    </div>
+  );
 
   return (
-    <Modal title={`Score Breakdown: ${staff.full_name}`} onClose={onClose} width={700}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 15, marginBottom: 20 }}>
-        <div style={{ padding: 15, background: '#f8fafc', borderRadius: 8, textAlign: 'center', border: '1px solid #e2e8f0' }}>
-          <div style={{ fontSize: 12, color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>Base Score</div>
-          <div style={{ fontSize: 24, fontWeight: 'bold', color: '#475569' }}>{breakdown.baseScore?.toFixed(2) || '0.00'} <span style={{fontSize: 14, color:'#94a3b8'}}>/ 100</span></div>
-        </div>
-        <div style={{ padding: 15, background: '#ecfdf5', borderRadius: 8, textAlign: 'center', border: '1px solid #a7f3d0' }}>
-          <div style={{ fontSize: 12, color: '#047857', textTransform: 'uppercase', fontWeight: 600 }}>Extra Points</div>
-          <div style={{ fontSize: 24, fontWeight: 'bold', color: '#059669' }}>+{breakdown.totalExtraPoints?.toFixed(2) || '0.00'}</div>
-        </div>
-        <div style={{ padding: 15, background: '#eff6ff', borderRadius: 8, textAlign: 'center', border: '1px solid #bfdbfe' }}>
-          <div style={{ fontSize: 12, color: '#1d4ed8', textTransform: 'uppercase', fontWeight: 600 }}>Total Score</div>
-          <div style={{ fontSize: 24, fontWeight: 'bold', color: '#2563eb' }}>{staff.officialScore.toFixed(2)}</div>
-        </div>
+    <Modal title={`Score Breakdown: ${staff.full_name}`} onClose={onClose} width={780}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 12, marginBottom: 18 }}>
+        {box('#f8fafc', '#e2e8f0', '#64748b', '#475569', 'Base score', (bd.baseScore || 0).toFixed(2))}
+        {box('#ecfdf5', '#a7f3d0', '#047857', '#059669', 'Extra points', `+${(bd.totalExtraPoints || 0).toFixed(2)}`)}
+        {box('#eff6ff', '#bfdbfe', '#1d4ed8', '#2563eb', 'Total score', staff.officialScore.toFixed(2))}
+        {box('#faf5ff', '#e9d5ff', '#7e22ce', '#9333ea', 'Works completed', works ? doneCount : '…')}
+        {box('#fff7ed', '#fed7aa', '#c2410c', '#ea580c', 'Bonus points', bonus ? `+${bonusTotal}` : '…')}
       </div>
 
-      <h4 style={{ marginTop: 0, marginBottom: 10, color: '#1e293b' }}>Domain Details</h4>
-      <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
-        {domains.map(d => {
-          const pd = breakdown.per[d.code] || { na: true, score: 0, max: d.weight };
-          return (
-            <div key={d.code} style={{ padding: '12px 15px', borderBottom: '1px solid #e2e8f0', background: '#fff' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: 14 }}>
-                <span><span style={{ color: d.color }}>{d.code}</span> - {d.name}</span>
-                <span style={{ color: pd.na ? '#94a3b8' : d.color }}>
-                  {pd.na ? 'N/A' : `${pd.score.toFixed(1)} / ${pd.max}`}
-                </span>
+      {err && <div style={{ background: '#fef3c7', color: '#92400e', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>{err}</div>}
+      {!works && !err && <Empty text="Loading works..." />}
+
+      {works && domains.map(d => {
+        const pd = perDomain[d.code];
+        const subsWithData = d.subs.filter(s => (worksBySub[s.code] || []).length || (bonusBySub[s.code] || []).length);
+        const isOpen = openD && d.code in openD ? openD[d.code] : subsWithData.length > 0;
+        const toggle = () => setOpenD(o => ({ ...(o || {}), [d.code]: !isOpen }));
+        return (
+          <div key={d.code} style={{ border: '1px solid #e2e8f0', borderRadius: 10, marginBottom: 10, overflow: 'hidden' }}>
+            <div onClick={toggle} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '12px 15px', background: '#f8fafc', cursor: 'pointer', flexWrap: 'wrap' }}>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>
+                <span style={{ background: d.color, color: '#fff', padding: '2px 9px', borderRadius: 12, fontSize: 12, marginRight: 8 }}>{d.code}</span>{d.name} {isOpen ? '▲' : '▼'}
               </div>
+              <div style={{ fontWeight: 700, color: !pd || pd.na ? '#94a3b8' : d.color }}>{!pd ? '–' : pd.na ? 'N/A' : `${pd.score.toFixed(1)} / ${pd.max}`}</div>
             </div>
-          );
-        })}
+
+            {isOpen && (subsWithData.length === 0
+              ? <div style={{ padding: 14, fontSize: 13, color: '#94a3b8' }}>No work or bonus records in this domain.</div>
+              : subsWithData.map(s => {
+                const items = worksBySub[s.code] || [];
+                const bons = bonusBySub[s.code] || [];
+                const x = perSub[s.code];
+                const wk = items.reduce((acc, i) => { const f = info(i); if (f.got !== null) { acc.earned += f.got; acc.max += f.max; } return acc; }, { earned: 0, max: 0 });
+                return (
+                  <div key={s.code} style={{ padding: '12px 15px', borderTop: '1px solid #e2e8f0' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+                      <div style={{ fontSize: 13 }}><b style={{ color: d.color }}>{s.code}</b> <b>{s.name}</b> <span style={{ color: '#64748b', fontSize: 12 }}>({s.weight} marks)</span></div>
+                      <div style={{ fontSize: 12, color: '#475569', textAlign: 'right' }}>
+                        {wk.max > 0 && <span>Work points: <b>{wk.earned.toFixed(1)} / {wk.max.toFixed(1)}</b> • </span>}
+                        {x && !x.na && <span>Sub-domain score: <b>{x.score.toFixed(2)} / {s.weight}</b></span>}
+                        {x && x.extraPoints > 0 && <span style={{ color: '#059669', fontWeight: 700 }}> • +{x.extraPoints} extra</span>}
+                      </div>
+                    </div>
+
+                    {items.map(i => {
+                      const f = info(i);
+                      return (
+                        <div key={i.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px dashed #f1f5f9', fontSize: 13, flexWrap: 'wrap' }}>
+                          <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                            <div style={{ fontWeight: 500 }}>{i.title}</div>
+                            <div style={{ fontSize: 11, color: '#94a3b8' }}>{KINDS[i.kind]?.one || i.kind}{i.subject_name ? ` • ${i.subject_name}` : ''}{i.due_date ? ` • due ${fmtDate(i.due_date)}` : ''}</div>
+                          </div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                            {chip(f.tone, f.label)}
+                            <b style={{ minWidth: 56, textAlign: 'right', color: f.got === null ? '#94a3b8' : f.got >= f.max ? '#16a34a' : f.got === 0 ? '#ef4444' : '#d97706' }}>{f.got === null ? `– / ${f.max}` : `${f.got} / ${f.max}`}</b>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {bons.map((b, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, padding: '7px 0', borderTop: '1px dashed #f1f5f9', fontSize: 13, flexWrap: 'wrap' }}>
+                        <div style={{ flex: '1 1 260px', minWidth: 0 }}>
+                          <div style={{ fontWeight: 500 }}>🎁 {b.title || 'Bonus points'}</div>
+                          {b.reason && <div style={{ fontSize: 11, color: '#94a3b8' }}>{b.reason}</div>}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {chip('green', 'Bonus approved')}
+                          <b style={{ minWidth: 56, textAlign: 'right', color: '#ea580c' }}>+{b.points_approved}</b>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              }))}
+          </div>
+        );
+      })}
+
+      <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 8 }}>
+        Only completed and overdue works are counted. Work waiting for approval or not yet due is shown but not counted yet. Ratings given by the Principal are not shown here.
       </div>
     </Modal>
   );
@@ -793,7 +886,7 @@ function LeaderboardPage({ profile }) {
   const [needsSql, setNeedsSql] = useState(false);
   const [q, setQ] = useState('');
   const [dept, setDept] = useState('all');
-  const [selectedStaff, setSelectedStaff] = useState(null); // സ്കോർ ബ്രേക്ക്ഡൗൺ കാണിക്കാൻ
+  const [selectedStaff, setSelectedStaff] = useState(null);
   const rater = profile.role === 'admin' || profile.role === 'appraisal_authority';
 
   const load = useCallback(async () => {
@@ -819,17 +912,16 @@ function LeaderboardPage({ profile }) {
       const rm = {}; let hasRatings = false;
       (a?.appraisal_sub_ratings || []).forEach(r => { if (r.rating !== null && r.rating !== undefined) { rm[r.sub_code] = r.rating; hasRatings = true; } });
       const wm = withBonus(wmBy[s.id] || {}, bonusBy[s.id] || []);
-      
+
       let computedData = { total: 0, baseScore: 0, totalExtraPoints: 0, per: {}, subs: {} };
       if (a?.status === 'Approved' && !hasRatings) {
-         computedData.total = Number(a.final_score) || 0;
-         computedData.baseScore = computedData.total;
+        computedData.total = Number(a.final_score) || 0;
+        computedData.baseScore = computedData.total;
       } else if (hasRatings || Object.keys(wm).length) {
-         computedData = computeScores(rm, wm);
+        computedData = computeScores(rm, wm);
       }
-      
-      let officialScore = Math.min(100, computedData.total);
-      
+
+      const officialScore = Math.min(100, computedData.total);
       return { ...s, officialScore, breakdown: computedData, bonus: 0, totalEarned: officialScore, finalised: a?.status === 'Approved' };
     });
     scores.sort((a, b) => b.totalEarned - a.totalEarned);
@@ -859,7 +951,7 @@ function LeaderboardPage({ profile }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h2 style={{ margin: '0 0 10px 0', fontSize: 28, color: '#1e293b' }}>🏆 Performance Leaderboard</h2>
-          <p style={{ color: '#64748b', margin: 0 }}>Live scores (Max 100): approved work and bonus points are added as soon as they are approved. Refreshes every minute.</p>
+          <p style={{ color: '#64748b', margin: 0 }}>Live scores (Max 100): approved work and bonus points are added as soon as they are approved. Click a staff member to see which works gave the points. Refreshes every minute.</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={load} style={S.btn('#475569')}>Refresh</button>
@@ -886,7 +978,7 @@ function LeaderboardPage({ profile }) {
         <h3 style={{ marginTop: 0, marginBottom: 20 }}>{filtering ? 'Results' : 'Other Staff Members'}</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 15 }}>
           {rest.map(r => (
-            <div key={r.id} onClick={() => setSelectedStaff(r)} style={{ display: 'flex', alignItems: 'center', gap: 15, padding: 15, border: r.id === profile.id ? '2px solid #2563eb' : '1px solid #f1f5f9', borderRadius: 12, background: '#f8fafc', cursor: 'pointer', transition: 'all 0.2s' }}>
+            <div key={r.id} onClick={() => setSelectedStaff(r)} style={{ display: 'flex', alignItems: 'center', gap: 15, padding: 15, border: r.id === profile.id ? '2px solid #2563eb' : '1px solid #f1f5f9', borderRadius: 12, background: '#f8fafc', cursor: 'pointer' }}>
               <Avatar url={r.avatar_url} name={r.full_name} size={50} />
               <div style={{ flex: 1, overflow: 'hidden' }}>
                 <div style={{ fontWeight: 'bold', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.full_name}{r.id === profile.id && ' (You)'}</div>
@@ -1790,12 +1882,12 @@ function RatingButtons({ value, onChange, disabled, color }) {
       {[1, 2, 3, 4, 5, 0].map(v => {
         const on = value === v;
         return (
-          <button 
-            key={v} 
-            type="button" 
-            disabled={disabled} 
-            title={RATING_LABEL[v]} 
-            // N/A (0) ആക്ടീവ് ആയിരിക്കുമ്പോൾ വീണ്ടും ക്ലിക്ക് ചെയ്താൽ അത് ഓഫ് ആകും (undefined)
+          <button
+            key={v}
+            type="button"
+            disabled={disabled}
+            title={RATING_LABEL[v]}
+            // clicking an active N/A again switches it off (undefined)
             onClick={() => onChange(on && v === 0 ? undefined : v)}
             style={{ minWidth: v === 0 ? 46 : 34, padding: '6px 8px', borderRadius: 6, border: on ? `2px solid ${color}` : '1px solid #cbd5e1', background: on ? `${color}18` : '#fff', color: on ? color : '#475569', fontWeight: 600, fontSize: 13, cursor: disabled ? 'default' : 'pointer' }}
           >
