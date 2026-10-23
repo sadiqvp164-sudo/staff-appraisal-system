@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo, createContext
 import {
   Award, ClipboardList, GraduationCap, LayoutDashboard, LogOut, Menu, Plus,
   ShieldCheck, Users, X, Download, Settings, Edit, Trash2, Camera, Megaphone, Gift, BarChart3,
-  Search, Printer, Pin, Eye, EyeOff, KeyRound
+  Search, Printer, Pin, Eye, EyeOff, KeyRound, BookOpen
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -60,6 +60,7 @@ const nav = [
   { id: 'work', label: 'Work & CCE', icon: ClipboardList, roles: ALL },
   { id: 'appraisal', label: 'Appraisal Workflow', icon: GraduationCap, roles: ALL },
   { id: 'reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'coordinator', 'appraisal_authority'] },
+  { id: 'portal', label: 'Academic Portal', icon: BookOpen, roles: ALL },
   { id: 'settings', label: 'My Account', icon: Settings, roles: ALL }
 ];
 
@@ -367,6 +368,7 @@ function App() {
   const [password, setPassword] = useState('');
   const [active, setActive] = useState('dashboard');
   const [mobileNav, setMobileNav] = useState(false);
+  const [showParent, setShowParent] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -408,7 +410,9 @@ function App() {
 
   if (!isSupabaseConfigured) return <div style={{ padding: 50, textAlign: 'center' }}>Supabase is not configured. Check ./lib/supabase.</div>;
   if (authLoading) return <div style={{ padding: 50, textAlign: 'center' }}>Loading...</div>;
-  if (!session) return <Login email={email} setEmail={setEmail} password={password} setPassword={setPassword} onSubmit={signIn} error={authError} loading={signingIn} />;
+  if (!session) return showParent
+    ? <ParentPortal onBack={() => setShowParent(false)} />
+    : <Login email={email} setEmail={setEmail} password={password} setPassword={setPassword} onSubmit={signIn} error={authError} loading={signingIn} onParent={() => setShowParent(true)} />;
   if (profile && profile.active === false) {
     return (
       <div style={{ padding: 50, textAlign: 'center' }}>
@@ -504,6 +508,7 @@ function App() {
           {profile && page === 'work' && <WorkPage userRole={userRole} profile={profile} />}
           {profile && page === 'appraisal' && <AppraisalPage userRole={userRole} profile={profile} />}
           {profile && page === 'reports' && <ReportsPage />}
+          {profile && page === 'portal' && <PortalPage userRole={userRole} profile={profile} />}
           {profile && page === 'settings' && <AccountSettingsPage profile={profile} reloadProfile={() => loadProfile(profile.id)} />}
         </main>
       </div>
@@ -514,7 +519,7 @@ function App() {
 // ==========================================
 // LOGIN
 // ==========================================
-function Login({ email, setEmail, password, setPassword, onSubmit, error, loading }) {
+function Login({ email, setEmail, password, setPassword, onSubmit, error, loading, onParent }) {
   const [show, setShow] = useState(false);
   return <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', padding: 20 }}>
     <div style={{ background: '#fff', padding: 40, borderRadius: 16, boxShadow: '0 4px 6px -1px rgba(0,0,0,0.1)', width: '100%', maxWidth: 400 }}>
@@ -535,6 +540,7 @@ function Login({ email, setEmail, password, setPassword, onSubmit, error, loadin
         {error && <div style={{ color: '#ef4444', fontSize: 14 }}>{error}</div>}
         <button type="submit" disabled={loading} style={{ background: '#2563eb', color: '#fff', padding: 12, borderRadius: 8, border: 'none', cursor: 'pointer', fontWeight: 600 }}>{loading ? 'Signing in...' : 'Sign In'}</button>
       </form>
+      {onParent && <button type="button" onClick={onParent} style={{ marginTop: 16, width: '100%', padding: 12, borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontWeight: 600, color: '#334155' }}>🎓 Student / Parent Portal (grade card)</button>}
     </div>
   </div>;
 }
@@ -2226,6 +2232,903 @@ function ReportsPage() {
           </Table>
         )}
       </div>
+    </div>
+  );
+}
+
+// ==========================================
+// ACADEMIC PORTAL (marks, attendance, donation, activity points, grade card)
+// Data stays in the Google Sheet. This talks to the Apps Script API (PortalApi.gs).
+// ==========================================
+const SHEET_API = import.meta.env.VITE_SHEET_API_URL;
+const ATT_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DON_MONTHS = ['Previous Arrears', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December', 'January', 'February', 'March'];
+const QUEUE_KEY = 'nhia_offline_queue';
+
+async function sheet(action, args = [], { auth = true } = {}) {
+  if (!SHEET_API) throw new Error('VITE_SHEET_API_URL is not set. Add it to .env and to Vercel → Environment Variables, then redeploy.');
+  const body = { action, args };
+  if (auth) {
+    const { data } = await supabase.auth.getSession();
+    body.token = data.session?.access_token || '';
+  }
+  let j;
+  try {
+    const res = await fetch(SHEET_API, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+    j = await res.json();
+  } catch (e) {
+    throw new Error('Cannot reach the Google Sheet service. Check the internet and that the web app access is set to Anyone.');
+  }
+  if (!j.ok) throw new Error(j.error || 'Server error');
+  return j.data;
+}
+
+// ---- offline queue: entries saved while offline are uploaded when the phone is online again ----
+const qRead = () => { try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { return []; } };
+const qWrite = (q) => { try { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); } catch { /* storage full or blocked */ } };
+
+async function sheetSave(action, args) {
+  if (!navigator.onLine) { qWrite([...qRead(), { action, args, t: Date.now() }]); return { queued: true }; }
+  return sheet(action, args);
+}
+
+async function flushQueue() {
+  const q = qRead();
+  if (!q.length || !navigator.onLine) return 0;
+  const left = []; let done = 0;
+  for (const it of q) {
+    try { await sheet(it.action, it.args); done++; } catch (e) { if (/reach|session|sign in/i.test(e.message)) left.push(it); }
+  }
+  qWrite(left);
+  return done;
+}
+
+const checkSave = (r) => {
+  if (r && r.queued) return 'No internet: saved on this device. It uploads automatically when you are online.';
+  if (!r || !r.success) throw new Error((r && r.msg) || 'Save failed');
+  return r.msg || 'Saved';
+};
+
+function useRun() {
+  const { toast } = useUI();
+  const [busy, setBusy] = useState(false);
+  const run = async (fn) => {
+    setBusy(true);
+    try { return await fn(); } catch (e) { toast(e.message, 'error'); } finally { setBusy(false); }
+  };
+  return [busy, run];
+}
+
+function useSaver() {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const save = async (action, payload) => {
+    const m = await run(async () => checkSave(await sheetSave(action, [payload])));
+    if (m) toast(m);
+    return !!m;
+  };
+  return [busy, save];
+}
+
+const ClassSelect = ({ value, onChange, classes, placeholder = '-- Select class --' }) => (
+  <select value={value} onChange={e => onChange(e.target.value)} style={{ ...S.input, minWidth: 180 }}>
+    <option value="">{placeholder}</option>
+    {classes.map(c => <option key={c} value={c}>{c === 'ALL' ? 'All classes (campus)' : c}</option>)}
+  </select>
+);
+
+function DataTable({ heads, heads2, rows, nameCol = 1 }) {
+  return (
+    <div className="table-responsive">
+      <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 560, fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: '2px solid #e2e8f0' }}>{heads.map((h, i) => <th key={i} style={S.th}>{h}</th>)}</tr>
+          {heads2 && <tr style={{ background: '#f0f9ff' }}>{heads2.map((h, i) => <th key={i} style={{ ...S.th, textTransform: 'none' }}>{typeof h === 'number' ? `${h} days` : (h === '-' ? '' : h)}</th>)}</tr>}
+        </thead>
+        <tbody>
+          {rows.map((r, ri) => (
+            <tr key={ri} style={S.row}>
+              {r.map((c, ci) => <td key={ci} style={{ ...S.td, padding: '8px 10px', fontWeight: ci === nameCol ? 600 : 400, color: c === 'Pending' ? '#dc2626' : 'inherit' }}>{c}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SnapshotButtons({ targetRef, name }) {
+  const { toast } = useUI();
+  const asImage = async () => {
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const canvas = await html2canvas(targetRef.current, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+      const a = document.createElement('a');
+      a.download = `${name}.jpg`; a.href = canvas.toDataURL('image/jpeg', 0.95); a.click();
+    } catch (e) { toast('Image download failed: ' + e.message, 'error'); }
+  };
+  const asPdf = async () => {
+    try {
+      const html2pdf = (await import('html2pdf.js')).default;
+      await html2pdf().set({ margin: 8, filename: `${name}.pdf`, image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2, useCORS: true }, jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' } }).from(targetRef.current).save();
+    } catch (e) { toast('PDF download failed: ' + e.message, 'error'); }
+  };
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <button onClick={asPdf} style={S.btn('#dc2626')}><Download size={16} /> PDF</button>
+      <button onClick={asImage} style={S.btn('#d97706')}><Download size={16} /> Image</button>
+    </div>
+  );
+}
+
+// Pick a class -> run an Apps Script report -> show a table (+ CSV)
+function ClassReport({ classes, action, view, csv }) {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const [cls, setCls] = useState('');
+  const [res, setRes] = useState(null);
+  const go = async () => {
+    if (!cls) return toast('Select a class first.', 'error');
+    const r = await run(() => sheet(action, [cls]));
+    if (!r) return;
+    if (r.success === false) return toast(r.msg || 'No data', 'error');
+    setRes(r);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <ClassSelect value={cls} onChange={v => { setCls(v); setRes(null); }} classes={classes} />
+        <button onClick={go} disabled={busy} style={S.btn('#2563eb')}>{busy ? 'Loading...' : 'Generate'}</button>
+        {res && csv && <button onClick={() => csv(res)} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>}
+      </div>
+      {res && view(res)}
+    </div>
+  );
+}
+
+// ---------------- Examination ----------------
+function MarksEntry({ ctx }) {
+  const { toast } = useUI();
+  const [loading, run] = useRun();
+  const [busy, save] = useSaver();
+  const [cls, setCls] = useState('');
+  const [sub, setSub] = useState('');
+  const [rows, setRows] = useState(null);
+  const [vals, setVals] = useState({});
+  const isHifz = (s) => /HIFZ|MIDTERM/i.test(s);
+  const hifz = isHifz(sub);
+  const MAXES = { w1: 15, w2: 20, w3: 25, w4: 40 };
+  const subjects = ctx.isAdmin ? (ctx.classSubjectsMap[cls] || []).slice().sort() : [];
+
+  const load = async (c, s) => {
+    setRows(null);
+    if (!c || !s) return;
+    const list = await run(() => sheet('getClassStudents', [c, s]));
+    if (!list) return;
+    const h = isHifz(s);
+    setVals(Object.fromEntries(list.map(x => [x.adm, h ? { h: x.marks.total } : { w1: x.marks.w1, w2: x.marks.w2, w3: x.marks.w3, w4: x.marks.w4 }])));
+    setRows(list);
+  };
+  const setVal = (adm, k, v) => {
+    if (v !== '' && Number(v) < 0) return;
+    const max = k === 'h' ? 100 : MAXES[k];
+    if (v !== '' && Number(v) > max) return toast(`Maximum is ${max}`, 'error');
+    setVals(p => ({ ...p, [adm]: { ...p[adm], [k]: v } }));
+  };
+  const submit = async () => {
+    const out = [];
+    rows.forEach(s => {
+      const v = vals[s.adm] || {};
+      const base = { adm: s.adm, name: s.name, className: cls, subject: sub };
+      if (hifz) { if (v.h !== '' && v.h != null) out.push({ ...base, w1: v.h, w2: '', w3: '', w4: '' }); }
+      else if (['w1', 'w2', 'w3', 'w4'].some(k => v[k] !== '' && v[k] != null)) out.push({ ...base, w1: v.w1 ?? '', w2: v.w2 ?? '', w3: v.w3 ?? '', w4: v.w4 ?? '' });
+    });
+    if (!out.length) return toast('Enter marks before saving.', 'error');
+    if (await save('saveBulkMarks', out)) setRows(null);
+  };
+
+  const cell = (s, k) => <input type="number" min="0" value={vals[s.adm]?.[k] ?? ''} onChange={e => setVal(s.adm, k, e.target.value)} style={{ ...S.input, width: 80, textAlign: 'center', padding: 7 }} />;
+
+  return (
+    <div style={S.card}>
+      <h3 style={{ marginTop: 0 }}>Mark Entry</h3>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        {ctx.isAdmin ? <>
+          <ClassSelect value={cls} onChange={c => { setCls(c); setSub(''); setRows(null); }} classes={ctx.allClasses} />
+          <select value={sub} onChange={e => { setSub(e.target.value); load(cls, e.target.value); }} style={{ ...S.input, minWidth: 200 }} disabled={!cls}>
+            <option value="">-- Select subject --</option>{subjects.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </> : (
+          <select value={cls && sub ? `${cls}||${sub}` : ''} style={{ ...S.input, minWidth: 260 }}
+            onChange={e => { const [c, s] = (e.target.value || '').split('||'); setCls(c || ''); setSub(s || ''); load(c, s); }}>
+            <option value="">-- Select assigned class / subject --</option>
+            {ctx.assignments.map(a => <option key={`${a.className}||${a.subject}`} value={`${a.className}||${a.subject}`}>{a.className} – {a.subject}</option>)}
+          </select>
+        )}
+      </div>
+      {loading && <Empty text="Loading students and saved marks..." />}
+      {rows && (rows.length === 0 ? <Empty text="No students found in this class." /> : <>
+        <Table heads={hifz ? ['Adm', 'Name', 'Mark (Hifz 100 / Midterm 30)'] : ['Adm', 'Name', 'W1 (15)', 'W2 (20)', 'W3 (25)', 'W4 (40)']} min={hifz ? 480 : 700}>
+          {rows.map(s => (
+            <tr key={s.adm} style={S.row}>
+              <td style={S.td}>{s.adm}</td><td style={{ ...S.td, fontWeight: 600 }}>{s.name}</td>
+              {hifz ? <td style={S.td}>{cell(s, 'h')}</td> : ['w1', 'w2', 'w3', 'w4'].map(k => <td key={k} style={S.td}>{cell(s, k)}</td>)}
+            </tr>
+          ))}
+        </Table>
+        <button onClick={submit} disabled={busy} style={{ ...S.btn('#16a34a', { justifyContent: 'center', width: '100%', marginTop: 14, padding: 14 }) }}>{busy ? 'Saving...' : 'Save marks'}</button>
+      </>)}
+    </div>
+  );
+}
+
+function PerformanceReport() {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const [res, setRes] = useState(null);
+  const ref = useRef(null);
+  const go = async () => {
+    const r = await run(() => sheet('getPerformanceReport'));
+    if (!r) return;
+    if (r.success === false) return toast(r.msg, 'error');
+    setRes(r);
+  };
+  const pct = (n) => `${Number(n).toFixed(2)}%`;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <button onClick={go} disabled={busy} style={S.btn('#16a34a')}>{busy ? 'Calculating...' : '🏆 Generate campus performance report'}</button>
+        {res && <button onClick={() => downloadCSV('NHIA_Full_Performance_Report.csv', ['Campus Rank', 'Adm No', 'Name', 'Class', 'Percentage'], res.fullRankList.map((s, i) => [i + 1, s.adm, s.name, s.className, pct(s.perc)]))} style={S.btn('#475569')}><Download size={16} /> Full rank list (CSV)</button>}
+      </div>
+      {res && <>
+        <SnapshotButtons targetRef={ref} name="Performance_Evaluation" />
+        <div ref={ref} style={{ background: '#fff', padding: 16, border: '1px solid #e2e8f0', borderRadius: 10 }}>
+          <h3 style={{ textAlign: 'center', marginTop: 0 }}>NHIA Performance Evaluation</h3>
+          <h4>Best performing classes</h4>
+          <DataTable heads={['Rank', 'Class', 'Average']} rows={res.classPerformances.map((c, i) => [i + 1, c.className, pct(c.avgPerc)])} />
+          <h4>Top 10 students</h4>
+          <DataTable heads={['Rank', 'Name', 'Class', 'Percentage']} rows={res.topStudents.map((s, i) => [i + 1, `${s.name} (${s.adm})`, s.className, pct(s.perc)])} />
+          <h4>Needs attention (bottom 10)</h4>
+          <DataTable heads={['Name', 'Class', 'Percentage']} nameCol={0} rows={res.bottomStudents.map(s => [`${s.name} (${s.adm})`, s.className, pct(s.perc)])} />
+        </div>
+      </>}
+    </div>
+  );
+}
+
+function PendingMarks({ ctx }) {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const [by, setBy] = useState('all');
+  const [val, setVal] = useState('');
+  const [rows, setRows] = useState(null);
+  const ref = useRef(null);
+  const go = async () => {
+    if (by !== 'all' && !val) return toast(`Select a ${by}.`, 'error');
+    const r = await run(() => sheet('getPendingReport'));
+    if (!r) return;
+    if (r.success === false) return toast(r.msg, 'error');
+    setRows(r.data.filter(x => by === 'all' || (by === 'class' ? x.className === val : x.teacher === val)));
+  };
+  const table = rows && rows.map(r => [r.teacher, r.className, r.subject.replace(/MIDTERM/ig, '').trim(), r.details]);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <select value={by} onChange={e => { setBy(e.target.value); setVal(''); setRows(null); }} style={S.input}>
+          <option value="all">Whole campus</option><option value="class">By class</option><option value="teacher">By teacher</option>
+        </select>
+        {by === 'class' && <ClassSelect value={val} onChange={setVal} classes={ctx.allClasses} />}
+        {by === 'teacher' && <select value={val} onChange={e => setVal(e.target.value)} style={S.input}><option value="">-- Select teacher --</option>{ctx.allTeachers.map(t => <option key={t} value={t}>{t}</option>)}</select>}
+        <button onClick={go} disabled={busy} style={S.btn('#2563eb')}>{busy ? 'Loading...' : 'Show pending'}</button>
+        {rows && rows.length > 0 && <button onClick={() => downloadCSV('Pending_Marks.csv', ['Teacher', 'Class', 'Subject', 'Pending'], table)} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>}
+      </div>
+      {rows && (rows.length === 0 ? <Empty text="✅ Nothing pending." /> : <>
+        <SnapshotButtons targetRef={ref} name="Pending_Marks" />
+        <div ref={ref} style={{ background: '#fff', padding: 16, border: '1px solid #e2e8f0', borderRadius: 10 }}>
+          <h3 style={{ textAlign: 'center', marginTop: 0 }}>Pending marks</h3>
+          <DataTable heads={['Teacher', 'Class', 'Subject', 'Pending']} nameCol={0} rows={table} />
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+function ExamModule({ ctx }) {
+  const [t, setT] = useState('entry');
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Tabs tabs={[['entry', 'Mark Entry'], ['report', 'Class Report'], ['perf', 'Performance'], ['pend', 'Pending']]} value={t} onChange={setT} />
+      {t === 'entry' && <MarksEntry ctx={ctx} />}
+      {t === 'report' && <div style={S.card}><ClassReport classes={ctx.allClasses} action="getClassMarkReport"
+        view={res => res.data.length ? <DataTable heads={res.headers} rows={res.data} /> : <Empty text="No students found for this class." />}
+        csv={res => downloadCSV(`NHIA_${res.className}_MarkReport.csv`, res.headers, res.data)} /></div>}
+      {t === 'perf' && <div style={S.card}><PerformanceReport /></div>}
+      {t === 'pend' && <div style={S.card}><PendingMarks ctx={ctx} /></div>}
+    </div>
+  );
+}
+
+// ---------------- Attendance ----------------
+function AttendanceEntry({ classes }) {
+  const { toast } = useUI();
+  const [loading, run] = useRun();
+  const [busy, save] = useSaver();
+  const [cls, setCls] = useState(classes.length === 1 ? classes[0] : '');
+  const [month, setMonth] = useState('');
+  const [days, setDays] = useState('');
+  const [rows, setRows] = useState(null);
+  const [vals, setVals] = useState({});
+  const load = async () => {
+    if (!cls || !month || !days) return toast('Select class, month and total working days.', 'error');
+    const list = await run(() => sheet('getClassStudents', [cls, '']));
+    if (list) { setVals({}); setRows(list); }
+  };
+  const setV = (adm, v) => {
+    if (v !== '' && (Number(v) < 0 || Number(v) > Number(days))) return toast(`Attended days must be between 0 and ${days}.`, 'error');
+    setVals(p => ({ ...p, [adm]: v }));
+  };
+  const submit = async () => {
+    const students = rows.filter(s => vals[s.adm] !== undefined && vals[s.adm] !== '').map(s => ({ adm: s.adm, name: s.name, attended: Number(vals[s.adm]) }));
+    if (!students.length) return toast('Enter attended days before saving.', 'error');
+    if (await save('saveAttendanceBulk', { className: cls, month, workingDays: Number(days), students })) setRows(null);
+  };
+  return (
+    <div style={S.card}>
+      <h3 style={{ marginTop: 0 }}>Attendance register</h3>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        <ClassSelect value={cls} onChange={setCls} classes={classes} />
+        <select value={month} onChange={e => setMonth(e.target.value)} style={S.input}><option value="">-- Month --</option>{ATT_MONTHS.map(m => <option key={m} value={m}>{m}</option>)}</select>
+        <input type="number" min="1" placeholder="Working days" value={days} onChange={e => setDays(e.target.value)} style={{ ...S.input, width: 150 }} />
+        <button onClick={load} disabled={loading} style={S.btn('#2563eb')}>{loading ? 'Loading...' : 'Open register'}</button>
+      </div>
+      {rows && (rows.length === 0 ? <Empty text="No students found." /> : <>
+        <Table heads={['Adm No', 'Student', `Days attended (max ${days})`]} min={480}>
+          {rows.map(s => (
+            <tr key={s.adm} style={S.row}>
+              <td style={S.td}>{s.adm}</td><td style={{ ...S.td, fontWeight: 600 }}>{s.name}</td>
+              <td style={S.td}><input type="number" min="0" max={days} value={vals[s.adm] ?? ''} onChange={e => setV(s.adm, e.target.value)} style={{ ...S.input, width: 90, textAlign: 'center', padding: 7 }} /></td>
+            </tr>
+          ))}
+        </Table>
+        <button onClick={submit} disabled={busy} style={S.btn('#16a34a', { justifyContent: 'center', width: '100%', marginTop: 14, padding: 14 })}>{busy ? 'Saving...' : 'Save attendance'}</button>
+      </>)}
+    </div>
+  );
+}
+
+function CampusAttendance() {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const [res, setRes] = useState(null);
+  const go = async () => {
+    const r = await run(() => sheet('getAttendanceStats'));
+    if (!r) return;
+    if (r.error) return toast(r.msg || 'Error', 'error');
+    setRes(r);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div><button onClick={go} disabled={busy} style={S.btn('#2563eb')}>{busy ? 'Loading...' : '📊 Generate campus attendance analysis'}</button></div>
+      {res && <>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <h4 style={{ margin: 0, color: '#dc2626' }}>🚨 Critical leaves (more than 7.5 days)</h4>
+          {res.criticalLeaves.length > 0 && <button onClick={() => downloadCSV('Critical_Leaves.csv', ['Adm No', 'Name', 'Class', 'Leaves'], res.criticalLeaves.map(s => [s.adm, s.name, s.className, s.leaves.toFixed(1)]))} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>}
+        </div>
+        {res.criticalLeaves.length === 0 ? <Empty text="Nobody has crossed the limit." /> : <DataTable heads={['Adm No', 'Name', 'Class', 'Leaves taken']} rows={res.criticalLeaves.map(s => [s.adm, s.name, s.className, `${s.leaves.toFixed(1)} days`])} />}
+        <h4 style={{ margin: 0, color: '#16a34a' }}>🌟 Best attendance</h4>
+        {res.bestAttendance.length === 0 ? <Empty text="No data yet." /> : <DataTable heads={['Name', 'Class', 'Present / working', 'Attendance']} nameCol={0} rows={res.bestAttendance.map(s => [s.name, s.className, `${s.totalP} / ${s.totalW}`, `${s.perc.toFixed(1)}%`])} />}
+      </>}
+    </div>
+  );
+}
+
+function PendingAttendance() {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const [month, setMonth] = useState('');
+  const [res, setRes] = useState(null);
+  const ref = useRef(null);
+  const go = async () => {
+    if (!month) return toast('Select a month.', 'error');
+    const r = await run(() => sheet('getPendingAttendanceList', [month]));
+    if (!r) return;
+    if (r.success === false) return toast(r.msg, 'error');
+    setRes(r);
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <select value={month} onChange={e => { setMonth(e.target.value); setRes(null); }} style={S.input}><option value="">-- Month to scan --</option>{ATT_MONTHS.map(m => <option key={m} value={m}>{m}</option>)}</select>
+        <button onClick={go} disabled={busy} style={S.btn('#dc2626')}>{busy ? 'Scanning...' : 'Scan records'}</button>
+      </div>
+      {res && (res.pendingClasses.length === 0 ? <Empty text={`✅ All classes have submitted attendance for ${res.month}.`} /> : <>
+        <SnapshotButtons targetRef={ref} name={`Pending_Attendance_${res.month}`} />
+        <div ref={ref} style={{ background: '#fff', padding: 16, border: '1px solid #e2e8f0', borderRadius: 10 }}>
+          <h3 style={{ textAlign: 'center', marginTop: 0, color: '#dc2626' }}>Pending attendance – {res.month}</h3>
+          <DataTable heads={['No', 'Class', 'Status']} rows={res.pendingClasses.map((c, i) => [i + 1, c, 'Not submitted'])} />
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+function AttendanceModule({ ctx }) {
+  const [t, setT] = useState('entry');
+  if (!ctx.isAdmin) return <AttendanceEntry classes={ctx.classTeacherOf} />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Tabs tabs={[['entry', 'Enter Data'], ['report', 'Class Report'], ['campus', 'Campus Analysis'], ['pend', 'Pending Alert']]} value={t} onChange={setT} />
+      {t === 'entry' && <AttendanceEntry classes={ctx.allClasses} />}
+      {t === 'report' && <div style={S.card}><ClassReport classes={ctx.allClasses} action="getClassAttendanceReport"
+        view={res => res.data.length ? <DataTable heads={res.headers1} heads2={res.headers2} rows={res.data} /> : <Empty text="No students found for this class." />}
+        csv={res => downloadCSV(`NHIA_${res.className}_Attendance.csv`, res.headers1, [res.headers2.map(h => (typeof h === 'number' ? `${h} days` : h)), ...res.data])} /></div>}
+      {t === 'campus' && <div style={S.card}><CampusAttendance /></div>}
+      {t === 'pend' && <div style={S.card}><PendingAttendance /></div>}
+    </div>
+  );
+}
+
+// ---------------- Donation ----------------
+function DonationLedger({ classes }) {
+  const { toast } = useUI();
+  const [loading, run] = useRun();
+  const [busy, save] = useSaver();
+  const [cls, setCls] = useState(classes.length === 1 ? classes[0] : '');
+  const [list, setList] = useState(null);
+  const [vals, setVals] = useState({});
+  const expFor = (s, m) => (s.expData[m] !== undefined ? s.expData[m] : (m === 'Previous Arrears' ? s.arrearsDue : s.currentExpected));
+  const load = async () => {
+    if (!cls) return toast('Select a class.', 'error');
+    const l = await run(() => sheet('getDonationStudents', [cls]));
+    if (!l) return;
+    const v = {};
+    l.forEach(s => DON_MONTHS.forEach(m => { if (s.paidData[m] !== undefined) v[`${s.adm}|${m}`] = s.paidData[m]; }));
+    setVals(v); setList(l);
+  };
+  const submit = async () => {
+    const records = [];
+    list.forEach(s => DON_MONTHS.forEach(m => {
+      const raw = vals[`${s.adm}|${m}`];
+      const paid = raw === '' || raw === undefined ? 0 : Number(raw);
+      const exp = Number(expFor(s, m)) || 0;
+      // only rows that carry information: something paid, or a row that already exists (so it can be corrected to 0)
+      if (paid > 0 || s.paidData[m] !== undefined) records.push({ adm: s.adm, name: s.name, month: m, expected: exp, paid });
+    }));
+    if (!records.length) return toast('No data to save.', 'error');
+    if (await save('saveDonationWide', { className: cls, records })) setList(null);
+  };
+  return (
+    <div style={S.card}>
+      <h3 style={{ marginTop: 0 }}>Donation ledger</h3>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+        <ClassSelect value={cls} onChange={setCls} classes={classes} />
+        <button onClick={load} disabled={loading} style={S.btn('#2563eb')}>{loading ? 'Loading...' : 'Open class ledger'}</button>
+      </div>
+      {list && (list.length === 0 ? <Empty text="No students found." /> : <>
+        <Table heads={['Adm', 'Student', ...DON_MONTHS.map(m => (m === 'Previous Arrears' ? 'Arr' : m.slice(0, 3)))]} min={1250}>
+          {list.map(s => (
+            <tr key={s.adm} style={S.row}>
+              <td style={S.td}>{s.adm}</td>
+              <td style={{ ...S.td, fontWeight: 600, whiteSpace: 'nowrap' }}>{s.name}<div style={{ fontSize: 11, color: '#dc2626' }}>Monthly: ₹{s.currentExpected}</div></td>
+              {DON_MONTHS.map(m => (
+                <td key={m} style={{ ...S.td, padding: '8px 4px' }}>
+                  <input type="number" min="0" value={vals[`${s.adm}|${m}`] ?? ''} onChange={e => setVals(p => ({ ...p, [`${s.adm}|${m}`]: e.target.value }))}
+                    style={{ ...S.input, width: 62, padding: 5, textAlign: 'center', fontSize: 12, background: m === 'Previous Arrears' ? '#fee2e2' : '#fff' }} />
+                </td>
+              ))}
+            </tr>
+          ))}
+        </Table>
+        <button onClick={submit} disabled={busy} style={S.btn('#16a34a', { justifyContent: 'center', width: '100%', marginTop: 14, padding: 14 })}>{busy ? 'Saving...' : 'Save ledger'}</button>
+      </>)}
+    </div>
+  );
+}
+
+function DonationModule({ ctx }) {
+  const [t, setT] = useState('ledger');
+  if (!ctx.isAdmin) return <DonationLedger classes={ctx.classTeacherOf} />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Tabs tabs={[['ledger', 'Update Ledger'], ['report', 'Financial Report']]} value={t} onChange={setT} />
+      {t === 'ledger' && <DonationLedger classes={ctx.allClasses} />}
+      {t === 'report' && <div style={S.card}><ClassReport classes={ctx.allClasses} action="getAdminDonationReport"
+        view={res => <DataTable heads={res.headers} rows={res.data} />}
+        csv={res => downloadCSV(`NHIA_${res.className}_Donation_Report.csv`, res.headers, res.data)} /></div>}
+    </div>
+  );
+}
+
+// ---------------- Activity points ----------------
+const blankAct = { reason: '', custom: '', type: 'Plus', pts: '' };
+
+function ActInputs({ reasons, row, set }) {
+  const ro = reasons.find(r => r.reason === row.reason);
+  const other = row.reason === 'OTHER';
+  const type = other ? row.type : ro?.type;
+  const mini = { ...S.input, padding: 6, fontSize: 13 };
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+      <select value={row.reason} onChange={e => set({ reason: e.target.value, pts: '', type: 'Plus' })} style={{ ...mini, minWidth: 170 }}>
+        <option value="">-- Select reason --</option>
+        {reasons.map(r => <option key={r.reason} value={r.reason}>{r.reason}</option>)}
+        <option value="OTHER">Other (custom reason)</option>
+      </select>
+      {other && <>
+        <input placeholder="Type custom reason" value={row.custom} onChange={e => set({ custom: e.target.value })} style={{ ...mini, minWidth: 150 }} />
+        <select value={row.type} onChange={e => set({ type: e.target.value })} style={mini}><option value="Plus">Plus (+)</option><option value="Minus">Minus (-)</option></select>
+      </>}
+      {!other && type && <span style={{ background: type === 'Plus' ? '#dcfce7' : '#fee2e2', color: type === 'Plus' ? '#166534' : '#991b1b', borderRadius: 10, padding: '2px 8px', fontSize: 12, fontWeight: 700 }}>{type}</span>}
+      <input type="number" min="0" placeholder={ro?.max ? `Max ${ro.max}` : 'Points'} value={row.pts}
+        onChange={e => { let v = e.target.value; if (ro?.max && Number(v) > ro.max) v = String(ro.max); set({ pts: v }); }} style={{ ...mini, width: 90 }} />
+    </div>
+  );
+}
+
+const actRecord = (row, s, reasons, cls) => {
+  if (!row || !row.reason) return null;
+  const ro = reasons.find(r => r.reason === row.reason);
+  const other = row.reason === 'OTHER';
+  const reason = other ? row.custom.trim() : row.reason;
+  const type = other ? row.type : ro?.type;
+  const pts = Number(row.pts);
+  if (!reason || !type || !(pts > 0)) return null;
+  return { adm: s.adm, name: s.name, className: s.className || cls, type, points: pts, reason };
+};
+
+function ActivityEntry({ ctx }) {
+  const { toast } = useUI();
+  const [loading, run] = useRun();
+  const [busy, save] = useSaver();
+  const reasons = ctx.actReasons || [];
+  const [mode, setMode] = useState('single');
+  const [adm, setAdm] = useState('');
+  const [stu, setStu] = useState(null);
+  const [row, setRow] = useState(blankAct);
+  const [cls, setCls] = useState('');
+  const [list, setList] = useState(null);
+  const [rows, setRows] = useState({});
+
+  const find = async () => {
+    if (!adm.trim()) return toast('Enter an admission number.', 'error');
+    const r = await run(() => sheet('getStudentByAdm', [adm.trim()]));
+    if (!r) return;
+    if (!r.success) { setStu(null); return toast(r.msg, 'error'); }
+    setStu(r); setRow(blankAct);
+  };
+  const saveSingle = async () => {
+    const rec = actRecord(row, stu, reasons, stu.className);
+    if (!rec) return toast('Choose a reason and enter points greater than 0.', 'error');
+    if (await save('saveActivityPointsBulk', { records: [rec] })) setRow(blankAct);
+  };
+  const loadClass = async () => {
+    if (!cls) return toast('Select a class.', 'error');
+    const l = await run(() => sheet('getClassStudents', [cls, '']));
+    if (l) { setList(l); setRows({}); }
+  };
+  const saveBulk = async () => {
+    const records = list.map(s => actRecord(rows[s.adm], s, reasons, cls)).filter(Boolean);
+    if (!records.length) return toast('No points entered.', 'error');
+    if (await save('saveActivityPointsBulk', { records })) setList(null);
+  };
+
+  return (
+    <div style={S.card}>
+      <h3 style={{ marginTop: 0 }}>Behaviour and activity points</h3>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        <button onClick={() => setMode('single')} style={S.btn(mode === 'single' ? '#1e293b' : '#94a3b8')}>Single student</button>
+        <button onClick={() => setMode('bulk')} style={S.btn(mode === 'bulk' ? '#1e293b' : '#94a3b8')}>Whole class</button>
+      </div>
+      {mode === 'single' && <>
+        <form onSubmit={e => { e.preventDefault(); find(); }} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+          <input placeholder="Admission number" value={adm} onChange={e => setAdm(e.target.value)} style={{ ...S.input, width: 220 }} />
+          <button type="submit" disabled={loading} style={S.btn('#2563eb')}>{loading ? 'Searching...' : 'Find student'}</button>
+        </form>
+        {stu && (
+          <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 12, padding: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <b>🎓 {stu.name} <span style={{ color: '#64748b', fontWeight: 400 }}>({stu.className})</span></b>
+            <ActInputs reasons={reasons} row={row} set={p => setRow(r => ({ ...r, ...p }))} />
+            <div><button onClick={saveSingle} disabled={busy} style={S.btn('#16a34a')}>{busy ? 'Saving...' : 'Save point'}</button></div>
+          </div>
+        )}
+      </>}
+      {mode === 'bulk' && <>
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 14 }}>
+          <ClassSelect value={cls} onChange={setCls} classes={ctx.allClasses} />
+          <button onClick={loadClass} disabled={loading} style={S.btn('#2563eb')}>{loading ? 'Loading...' : 'Load students'}</button>
+        </div>
+        {list && (list.length === 0 ? <Empty text="No students found." /> : <>
+          <Table heads={['Adm No', 'Name', 'Entry']} min={720}>
+            {list.map(s => (
+              <tr key={s.adm} style={S.row}>
+                <td style={S.td}>{s.adm}</td><td style={{ ...S.td, fontWeight: 600 }}>{s.name}</td>
+                <td style={S.td}><ActInputs reasons={reasons} row={rows[s.adm] || blankAct} set={p => setRows(r => ({ ...r, [s.adm]: { ...(r[s.adm] || blankAct), ...p } }))} /></td>
+              </tr>
+            ))}
+          </Table>
+          <button onClick={saveBulk} disabled={busy} style={S.btn('#16a34a', { justifyContent: 'center', width: '100%', marginTop: 14, padding: 14 })}>{busy ? 'Saving...' : 'Save all entries'}</button>
+        </>)}
+      </>}
+    </div>
+  );
+}
+
+function DisciplineReport({ ctx }) {
+  return (
+    <ClassReport classes={['ALL', ...ctx.allClasses]} action="getActivityStats"
+      view={res => (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <h4 style={{ margin: 0, color: '#dc2626' }}>🚨 Danger zone (negative net points)</h4>
+          {res.dangerZone.length === 0 ? <Empty text="No students in the danger zone." /> : <DataTable heads={['Name', 'Class', 'Plus', 'Minus', 'Net']} nameCol={0} rows={res.dangerZone.map(s => [s.name, s.className, s.plus, s.minus, s.net])} />}
+          <h4 style={{ margin: 0, color: '#16a34a' }}>⭐ Top performers (highest plus)</h4>
+          {res.topPlus.length === 0 ? <Empty text="No data." /> : <DataTable heads={['Name', 'Class', 'Plus points']} nameCol={0} rows={res.topPlus.map(s => [s.name, s.className, s.plus])} />}
+          <h4 style={{ margin: 0, color: '#d97706' }}>⚠️ Most disciplinary issues (highest minus)</h4>
+          {res.topMinus.length === 0 ? <Empty text="No data." /> : <DataTable heads={['Name', 'Class', 'Minus points']} nameCol={0} rows={res.topMinus.map(s => [s.name, s.className, s.minus])} />}
+        </div>
+      )} />
+  );
+}
+
+function ActivityModule({ ctx }) {
+  const [t, setT] = useState('entry');
+  if (!ctx.isAdmin) return <ActivityEntry ctx={ctx} />;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <Tabs tabs={[['entry', 'Award Points'], ['roster', 'Class Report'], ['disc', 'Discipline Report']]} value={t} onChange={setT} />
+      {t === 'entry' && <ActivityEntry ctx={ctx} />}
+      {t === 'roster' && <div style={S.card}><ClassReport classes={ctx.allClasses} action="getActivityStats"
+        view={res => res.fullList.length ? <DataTable heads={['Adm No', 'Name', 'Plus (+)', 'Minus (-)', 'Net']} rows={res.fullList.map(s => [s.adm, s.name, s.plus, s.minus, s.net])} /> : <Empty text="No students found." />}
+        csv={res => downloadCSV(`NHIA_${res.className}_Activity_Points.csv`, ['Adm No', 'Name', 'Plus', 'Minus', 'Net'], res.fullList.map(s => [s.adm, s.name, s.plus, s.minus, s.net]))} /></div>}
+      {t === 'disc' && <div style={S.card}><DisciplineReport ctx={ctx} /></div>}
+    </div>
+  );
+}
+
+// ---------------- Syllabus, alerts, directory ----------------
+function SyllabusTab({ ctx }) {
+  const { toast } = useUI();
+  const [doc, setDoc] = useState('');
+  const keys = Object.keys(ctx.syllabusMap || {});
+  const open = () => {
+    if (!doc) return toast('Select a document.', 'error');
+    let url = String(ctx.syllabusMap[doc] || '').trim();
+    if (!url) return toast('Syllabus link not found.', 'error');
+    if (!url.startsWith('http')) url = 'https://' + url;
+    window.open(url, '_blank');
+  };
+  return (
+    <div style={S.card}>
+      <h3 style={{ marginTop: 0 }}>Syllabus library</h3>
+      {keys.length === 0 ? <Empty text="No documents in the Syllabus_Links sheet yet." /> : (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <select value={doc} onChange={e => setDoc(e.target.value)} style={{ ...S.input, minWidth: 260 }}><option value="">-- Select document --</option>{keys.map(k => <option key={k} value={k}>{k}</option>)}</select>
+          <button onClick={open} style={S.btn('#1e293b')}>Open document</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AlertsMail({ ctx }) {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const [f, setF] = useState({ target: 'ALL', subject: '', message: '' });
+  const send = async (e) => {
+    e.preventDefault();
+    const r = await run(() => sheet('sendCustomReminder', [f]));
+    if (r) { toast(r); setF({ ...f, subject: '', message: '' }); }
+  };
+  return (
+    <div style={S.card}>
+      <h3 style={{ marginTop: 0 }}>Email teachers</h3>
+      <form onSubmit={send} style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 640 }}>
+        <select value={f.target} onChange={e => setF({ ...f, target: e.target.value })} style={S.input}>
+          <option value="ALL">All registered teachers</option><option value="CLASS_TEACHERS">Class teachers only</option>
+          <optgroup label="Direct message">{ctx.allTeachers.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>
+        </select>
+        <input required placeholder="Subject" value={f.subject} onChange={e => setF({ ...f, subject: e.target.value })} style={S.input} />
+        <textarea required placeholder="Message" value={f.message} onChange={e => setF({ ...f, message: e.target.value })} style={{ ...S.input, minHeight: 120 }} />
+        <div><button type="submit" disabled={busy} style={S.btn('#2563eb')}>{busy ? 'Sending...' : 'Send email'}</button></div>
+      </form>
+    </div>
+  );
+}
+
+function StudentsTab({ ctx }) {
+  return (
+    <div style={S.card}>
+      <h3 style={{ marginTop: 0 }}>Student directory</h3>
+      <ClassReport classes={ctx.allClasses} action="getStudentsDirectory"
+        view={res => res.students.length ? <DataTable heads={['Adm No', 'Student', 'Monthly pledge (₹)', 'Previous arrears (₹)']} rows={res.students.map(s => [s.adm, s.name, s.pledge, s.arrears])} /> : <Empty text="No students found." />}
+        csv={res => downloadCSV(`NHIA_${res.className}_Students.csv`, ['Adm No', 'Name', 'Monthly pledge', 'Previous arrears'], res.students.map(s => [s.adm, s.name, s.pledge, s.arrears]))} />
+    </div>
+  );
+}
+
+// ---------------- Grade card (staff + parent portal) ----------------
+function GradeCard({ res, adm, innerRef }) {
+  const cell = { border: '1px solid #000', padding: 6, fontSize: 13, color: '#000' };
+  const head = { ...cell, background: '#f2f2f2', fontWeight: 'bold' };
+  const stCol = (s) => (s === 'Failed' ? '#dc3545' : s === 'Pending' ? '#fd7e14' : '#198754');
+  const pts = res.points;
+  const totalPts = pts ? pts.plus + pts.minus : 0;
+  return (
+    <div style={{ overflowX: 'auto', padding: 4 }}>
+      <div ref={innerRef} style={{ background: '#fff', color: '#000', border: '2px solid #000', width: 794, minHeight: 1000, margin: '0 auto', padding: 20, position: 'relative', boxSizing: 'border-box', fontFamily: "'Times New Roman', Times, serif" }}>
+        <img src="https://i.postimg.cc/q73kY0pC/3feddd24-a80b-482d-9981-9f2dedfd82f7.jpg" alt="Logo" crossOrigin="anonymous" style={{ width: 90, position: 'absolute', left: 30, top: 20 }} />
+        <div style={{ borderBottom: '2px solid #000', paddingBottom: 10, marginBottom: 15, textAlign: 'center' }}>
+          <p style={{ fontSize: 20, fontWeight: 'bold', margin: 0 }}>Noorul Hidaya Islamic Academy, Pattambi</p>
+          <p style={{ fontSize: 14, margin: '4px 0' }}>(Affiliated to: Darul Huda Islamic University)</p>
+          <p style={{ fontSize: 14, margin: 0 }}>Kondoorkkara, Aman nagar, 679313</p>
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 15 }}>
+          <tbody>
+            <tr><td style={{ ...cell, width: '30%' }}><b>Academic Year:</b> 2026-27</td><td style={{ ...cell, textAlign: 'center', fontWeight: 'bold', fontSize: 16 }}>CCE Grade Card</td><td style={{ ...cell, width: '30%' }}><b>Term:</b> Half Year</td></tr>
+            <tr><td style={cell}><b>Date:</b> {new Date().toLocaleDateString('en-GB')}</td><td style={cell}><b>Ad No:</b> {adm}</td><td style={cell}><b>Std:</b> {res.className}</td></tr>
+            <tr><td style={cell} colSpan={2}><b>Name:</b> <span style={{ textTransform: 'uppercase' }}>{res.studentName}</span></td><td style={{ ...cell, color: '#0d6efd' }}><b>Attendance:</b> {res.attendance}</td></tr>
+          </tbody>
+        </table>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginBottom: 15, textAlign: 'center' }}>
+          <thead><tr>
+            <th style={head}>Sl No</th><th style={{ ...head, textAlign: 'left' }}>Subjects</th>
+            <th style={head} title="Work 1 (15)">W1</th><th style={head} title="Work 2 (20)">W2</th><th style={head} title="Work 3 (25)">W3</th><th style={head} title="Work 4 (40)">W4</th>
+            <th style={head}>Scored</th><th style={head}>Max</th><th style={head}>%</th><th style={head}>Status</th>
+          </tr></thead>
+          <tbody>
+            {res.marks.map((m, i) => (
+              <tr key={i}>
+                <td style={cell}>{i + 1}</td><td style={{ ...cell, textAlign: 'left', fontWeight: 'bold' }}>{m.subject.replace(/MIDTERM/ig, '').trim()}</td>
+                <td style={cell}>{m.w1}</td><td style={cell}>{m.w2}</td><td style={cell}>{m.w3}</td><td style={cell}>{m.w4}</td>
+                <td style={{ ...cell, fontWeight: 'bold' }}>{m.scored}</td><td style={cell}>{m.maxMark}</td><td style={cell}>{m.percentage}{m.percentage !== '-' ? '%' : ''}</td>
+                <td style={{ ...cell, color: stCol(m.status), fontWeight: 'bold' }}>{m.status}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 20, gap: 20 }}>
+          <table style={{ borderCollapse: 'collapse', width: '55%' }}>
+            <tbody>
+              <tr><td style={cell}>Grand Total</td><td style={cell}>{res.grandTotal} / {res.totalMax}</td></tr>
+              <tr><td style={cell}>Percentage</td><td style={cell}>{res.percentage} %</td></tr>
+              <tr><td style={cell}>Class Rank</td><td style={cell}>{res.classRank} / {res.classCount}</td></tr>
+              <tr><td style={cell}>Campus Rank</td><td style={cell}>{res.campusRank} / {res.campusCount}</td></tr>
+              <tr><td style={cell}>Failed Subjects</td><td style={{ ...cell, color: '#dc3545', fontWeight: 'bold' }}>{res.failedCount}</td></tr>
+            </tbody>
+          </table>
+          <div style={{ textAlign: 'center', width: '40%' }}>
+            <p style={{ margin: '40px 0 5px' }}>___________________</p><b>Principal</b>
+          </div>
+        </div>
+        {pts && pts.hasPoints && (
+          <div style={{ border: '1px solid #ccc', padding: 10, borderRadius: 5, marginBottom: 20 }}>
+            <div style={{ background: '#e2e3e5', padding: 6, textAlign: 'center', fontWeight: 'bold' }}>Behavioral and Activity Points</div>
+            <div style={{ display: 'flex', justifyContent: 'space-around', textAlign: 'center', margin: '10px 0' }}>
+              <div><div style={{ fontSize: 22, color: '#198754' }}>+{pts.plus}</div><div style={{ fontSize: 12 }}>Plus points</div></div>
+              <div><div style={{ fontSize: 22, color: '#0d6efd', fontWeight: 'bold' }}>{pts.net}</div><div style={{ fontSize: 12, fontWeight: 'bold' }}>Net score</div></div>
+              <div><div style={{ fontSize: 22, color: '#dc3545' }}>-{pts.minus}</div><div style={{ fontSize: 12 }}>Minus points</div></div>
+            </div>
+            <div style={{ display: 'flex', height: 14, borderRadius: 8, overflow: 'hidden', background: '#f1f1f1' }}>
+              <div style={{ width: `${totalPts ? (pts.plus / totalPts) * 100 : 0}%`, background: '#198754' }} />
+              <div style={{ width: `${totalPts ? (pts.minus / totalPts) * 100 : 0}%`, background: '#dc3545' }} />
+            </div>
+            <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 10, fontSize: 11 }}>
+              <tbody>{pts.history.map((p, i) => (
+                <tr key={i}>
+                  <td style={cell}>{p.date}</td>
+                  <td style={{ ...cell, color: p.type === 'Plus' ? '#198754' : '#dc3545', fontWeight: 'bold' }}>{p.type}</td>
+                  <td style={{ ...cell, color: p.type === 'Plus' ? '#198754' : '#dc3545', fontWeight: 'bold' }}>{p.type === 'Plus' ? '+' : '-'}{p.points}</td>
+                  <td style={{ ...cell, textAlign: 'left' }}>{p.reason}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+        {res.hasDonationData && (
+          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'center', marginBottom: 15 }}>
+            <thead>
+              <tr><th colSpan={4} style={{ ...head, background: '#fff3cd', fontSize: 14 }}>Monthly Fee / Donation Status</th></tr>
+              <tr><th style={head}>Month</th><th style={head}>Expected (₹)</th><th style={head}>Paid (₹)</th><th style={head}>Balance (₹)</th></tr>
+            </thead>
+            <tbody>
+              {res.donationList.map((d, i) => (
+                <tr key={i}>
+                  <td style={cell}>{d.month === 'Previous Arrears' ? 'Previous Arrears (കുടിശ്ശിക)' : d.month}</td>
+                  <td style={cell}>₹{d.expected}</td><td style={cell}>₹{d.paid}</td>
+                  <td style={{ ...cell, fontWeight: 'bold', color: d.balance > 0 ? '#dc3545' : '#198754' }}>₹{d.balance}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot><tr><th colSpan={3} style={{ ...head, textAlign: 'right' }}>Total Pending Amount:</th><th style={{ ...head, color: '#dc3545', textAlign: 'left' }}>₹{res.totalDonationPending}</th></tr></tfoot>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GradeCardLookup({ auth }) {
+  const { toast } = useUI();
+  const [busy, run] = useRun();
+  const [adm, setAdm] = useState('');
+  const [res, setRes] = useState(null);
+  const ref = useRef(null);
+  const go = async (e) => {
+    e.preventDefault();
+    const a = adm.trim();
+    if (!a) return toast('Enter an admission number.', 'error');
+    const r = await run(() => sheet('getStudentReport', [a], { auth }));
+    if (!r) return;
+    if (!r.success) { setRes(null); return toast(r.msg || 'Data not found.', 'error'); }
+    setRes({ ...r, adm: a });
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <form onSubmit={go} style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <input placeholder="Admission number" value={adm} onChange={e => setAdm(e.target.value)} style={{ ...S.input, width: 240, fontWeight: 600 }} />
+        <button type="submit" disabled={busy} style={S.btn('#2563eb')}>{busy ? 'Loading...' : 'Generate grade card'}</button>
+      </form>
+      {res && <>
+        <SnapshotButtons targetRef={ref} name={`${res.studentName}_GradeCard`} />
+        <GradeCard res={res} adm={res.adm} innerRef={ref} />
+      </>}
+    </div>
+  );
+}
+
+function ParentPortal({ onBack }) {
+  return (
+    <div style={{ minHeight: '100vh', background: '#f8fafc', padding: 20 }}>
+      <div style={{ maxWidth: 900, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div><button onClick={onBack} style={S.btn('#475569')}>← Staff login</button></div>
+        <div style={S.card}>
+          <h2 style={{ marginTop: 0 }}>Student / Parent Portal</h2>
+          <p style={{ color: '#64748b', marginTop: 0 }}>Enter the admission number to see the grade card, attendance and fee status.</p>
+          <GradeCardLookup auth={false} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PortalPage({ userRole, profile }) {
+  const { toast } = useUI();
+  const [ctx, setCtx] = useState(null);
+  const [err, setErr] = useState('');
+  const [tab, setTab] = useState('exam');
+
+  useEffect(() => { sheet('context').then(setCtx).catch(e => setErr(e.message)); }, []);
+  useEffect(() => {
+    const f = async () => { const n = await flushQueue(); if (n) toast(`${n} offline entr${n > 1 ? 'ies' : 'y'} uploaded`); };
+    f();
+    window.addEventListener('online', f);
+    return () => window.removeEventListener('online', f);
+  }, []);
+
+  if (err) return <div style={{ ...S.card, color: '#991b1b', background: '#fef2f2' }}>{err}</div>;
+  if (!ctx) return <Empty text="Loading academic portal..." />;
+
+  const ct = ctx.classTeacherOf || [];
+  const admin = ctx.isAdmin;
+  const tabs = admin
+    ? [['exam', '📝 Examination'], ['att', '📅 Attendance'], ['don', '💸 Donation'], ['act', '⭐ Activity Points'], ['stu', '🎓 Students'], ['syl', '📚 Syllabus'], ['mail', '📢 Alerts & Email'], ['card', '🧾 Grade Card']]
+    : [['exam', '📝 Mark Entry'], ...(ct.length ? [['att', '📅 Attendance'], ['don', '💸 Ledger']] : []), ['act', '⭐ Activity Points'], ['syl', '📚 Syllabus'], ['card', '🧾 Grade Card']];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+      {!admin && ctx.assignments.length === 0 && ct.length === 0 && (
+        <div style={{ background: '#fef3c7', color: '#92400e', padding: 14, borderRadius: 10, fontSize: 14 }}>
+          Your login was not found in the Staff_List sheet, so no classes are assigned to you yet. Ask the admin to add your User ID in column B.
+        </div>
+      )}
+      <Tabs tabs={tabs} value={tab} onChange={setTab} />
+      {tab === 'exam' && (admin ? <ExamModule ctx={ctx} /> : <MarksEntry ctx={ctx} />)}
+      {tab === 'att' && <AttendanceModule ctx={ctx} />}
+      {tab === 'don' && <DonationModule ctx={ctx} />}
+      {tab === 'act' && <ActivityModule ctx={ctx} />}
+      {tab === 'stu' && <StudentsTab ctx={ctx} />}
+      {tab === 'syl' && <SyllabusTab ctx={ctx} />}
+      {tab === 'mail' && <AlertsMail ctx={ctx} />}
+      {tab === 'card' && <div style={S.card}><GradeCardLookup auth={true} /></div>}
     </div>
   );
 }
