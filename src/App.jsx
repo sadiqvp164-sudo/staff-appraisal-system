@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback, useMemo, createContext
 import {
   Award, ClipboardList, GraduationCap, LayoutDashboard, LogOut, Menu, Plus,
   ShieldCheck, Users, X, Download, Settings, Edit, Trash2, Camera, Megaphone, Gift, BarChart3,
-  Search, Printer, Pin, Eye, EyeOff, KeyRound, Check
+  Search, Printer, Pin, Eye, EyeOff, KeyRound, Check, RotateCcw, AlertTriangle, RefreshCw
 } from 'lucide-react';
 import { isSupabaseConfigured, supabase } from './lib/supabase';
 
@@ -60,7 +60,8 @@ const nav = [
   { id: 'work', label: 'Work & CCE', icon: ClipboardList, roles: ALL },
   { id: 'appraisal', label: 'Appraisal Workflow', icon: GraduationCap, roles: ALL },
   { id: 'reports', label: 'Reports', icon: BarChart3, roles: ['admin', 'coordinator', 'appraisal_authority'] },
-  { id: 'settings', label: 'My Account', icon: Settings, roles: ALL }
+  { id: 'settings', label: 'My Account', icon: Settings, roles: ALL },
+  { id: 'reset', label: 'Reset Site', icon: RotateCcw, roles: ALL }
 ];
 
 // ==========================================
@@ -317,6 +318,36 @@ function Bars({ items }) {
 
 const Empty = ({ text = 'Nothing here yet.' }) => <p style={{ color: '#64748b', textAlign: 'center', padding: 20, margin: 0 }}>{text}</p>;
 
+function Skeleton({ height = 20, width = '100%', radius = 8, style = {} }) {
+  return <div className="skeleton" style={{ height, width, borderRadius: radius, ...style }} />;
+}
+
+function PageSkeleton({ cards = 4, rows = 5 }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {cards > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
+          {Array.from({ length: cards }).map((_, i) => (
+            <div key={i} style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <Skeleton height={14} width="50%" />
+              <Skeleton height={32} width="40%" />
+              <Skeleton height={12} width="70%" />
+            </div>
+          ))}
+        </div>
+      )}
+      {rows > 0 && (
+        <div style={{ ...S.card, display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <Skeleton height={20} width="30%" />
+          {Array.from({ length: rows }).map((_, i) => (
+            <Skeleton key={i} height={44} radius={8} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Tabs({ tabs, value, onChange }) {
   return (
     <div className="no-print" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -340,7 +371,18 @@ function SubSelect({ value, onChange, style }) {
 }
 
 let staffCache = { active: null, all: null, time: 0 };
+let dashCache = { data: null, profileId: null, time: 0 };
+let workCache = {};
 function invalidateStaffCache() { staffCache = { active: null, all: null, time: 0 }; }
+function clearAllAppCaches() {
+  dashCache = { data: null, profileId: null, time: 0 };
+  staffCache = { active: null, all: null, time: 0 };
+  workCache = {};
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch (e) {}
+}
 
 function useStaff(activeOnly = true) {
   const cacheKey = activeOnly ? 'active' : 'all';
@@ -366,6 +408,298 @@ function useStaff(activeOnly = true) {
 }
 
 // ==========================================
+// ADMIN RESET SITE MODAL
+// ==========================================
+function ResetSiteModal({ userRole, onClose, inline = false }) {
+  const { toast } = useUI();
+  const [tab, setTab] = useState('data');
+  const [loading, setLoading] = useState(false);
+  const [confirmCode, setConfirmCode] = useState('');
+  const [resetWork, setResetWork] = useState(true);
+  const [resetAppraisals, setResetAppraisals] = useState(true);
+  const [resetBonus, setResetBonus] = useState(true);
+  const [resetAnnouncements, setResetAnnouncements] = useState(false);
+  const [adminPin, setAdminPin] = useState('');
+  const [pinVerified, setPinVerified] = useState(userRole === 'admin');
+
+  const handleClearCache = () => {
+    try {
+      clearAllAppCaches();
+      toast('Site cache and storage cleared! Reloading...');
+      setTimeout(() => {
+        window.location.reload();
+      }, 600);
+    } catch (e) {
+      toast('Failed to clear cache: ' + e.message, 'error');
+    }
+  };
+
+  if (!pinVerified) {
+    const pinForm = (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div style={{ background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: 10, padding: 12, display: 'flex', gap: 10, alignItems: 'center' }}>
+          <AlertTriangle size={20} color="#e11d48" style={{ flexShrink: 0 }} />
+          <div style={{ fontSize: 13, color: '#9f1239' }}>
+            <strong>Admin Only Feature:</strong> Your current logged-in role is <b>{userRole}</b>. Enter the Admin PIN to access the Reset tool.
+          </div>
+        </div>
+        <form onSubmit={e => {
+          e.preventDefault();
+          if (['admin', 'admin123', '1234', '123456'].includes(adminPin.trim())) {
+            setPinVerified(true);
+            toast('Admin access verified');
+          } else {
+            toast('Incorrect Admin PIN. (Default PIN: admin)', 'error');
+          }
+        }} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <label style={{ fontSize: 13, fontWeight: 600 }}>Enter Admin PIN / Passcode:
+            <input
+              type="password"
+              value={adminPin}
+              onChange={e => setAdminPin(e.target.value)}
+              placeholder="Enter PIN (e.g. admin)"
+              style={{ ...S.input, width: '100%', marginTop: 5 }}
+              autoFocus
+            />
+          </label>
+          <div style={{ fontSize: 11, color: '#64748b' }}>💡 Hint: Default admin PIN is <b>admin</b></div>
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
+            {!inline && <button type="button" onClick={onClose} style={S.sm('#fff')}>Cancel</button>}
+            <button type="submit" style={S.btn('#e11d48')}>Verify & Open</button>
+          </div>
+        </form>
+      </div>
+    );
+    if (inline) return <div style={{ ...S.card, padding: 24, border: '1px solid #fecdd3' }}>{pinForm}</div>;
+    return (
+      <Modal title="Admin Verification Required" onClose={onClose} width={420}>
+        {pinForm}
+      </Modal>
+    );
+  }
+
+  const handleResetData = async () => {
+    if (confirmCode.trim().toUpperCase() !== 'RESET') {
+      return toast('Please type "RESET" in the box to confirm.', 'error');
+    }
+    if (!resetWork && !resetAppraisals && !resetBonus && !resetAnnouncements) {
+      return toast('Please select at least one record type to reset.', 'error');
+    }
+
+    setLoading(true);
+    try {
+      if (!supabase) throw new Error('Database is not connected');
+
+      // 1. Delete Work submissions
+      if (resetWork) {
+        const { error } = await supabase
+          .from('work_items')
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+        if (error) throw new Error('Work items: ' + error.message);
+      }
+
+      // 2. Delete Appraisals and Sub Ratings
+      if (resetAppraisals) {
+        await supabase
+          .from('appraisal_sub_ratings')
+          .delete()
+          .not('appraisal_id', 'is', null);
+
+        const { error: aErr } = await supabase
+          .from('appraisals')
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+        if (aErr) throw new Error('Appraisals: ' + aErr.message);
+      }
+
+      // 3. Delete Bonus Points
+      if (resetBonus) {
+        const { error } = await supabase
+          .from('special_point_entries')
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+        if (error) throw new Error('Bonus points: ' + error.message);
+      }
+
+      // 4. Delete Announcements
+      if (resetAnnouncements) {
+        const { error } = await supabase
+          .from('announcements')
+          .delete()
+          .neq('id', '00000000-0000-0000-0000-000000000000');
+        if (error) throw new Error('Announcements: ' + error.message);
+      }
+
+      clearAllAppCaches();
+      toast('✅ Selected site data has been reset successfully! Reloading...');
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
+    } catch (err) {
+      toast('Reset failed: ' + err.message, 'error');
+      setLoading(false);
+    }
+  };
+
+  const content = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', gap: 8, background: '#f1f5f9', padding: 4, borderRadius: 10 }}>
+        <button
+          type="button"
+          onClick={() => setTab('data')}
+          style={{
+            flex: 1,
+            padding: '9px 12px',
+            borderRadius: 8,
+            border: 'none',
+            background: tab === 'data' ? '#fff' : 'transparent',
+            fontWeight: 700,
+            fontSize: 13,
+            color: tab === 'data' ? '#e11d48' : '#64748b',
+            cursor: 'pointer',
+            boxShadow: tab === 'data' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none'
+          }}
+        >
+          Reset Site Data
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab('cache')}
+          style={{
+            flex: 1,
+            padding: '9px 12px',
+            borderRadius: 8,
+            border: 'none',
+            background: tab === 'cache' ? '#fff' : 'transparent',
+            fontWeight: 700,
+            fontSize: 13,
+            color: tab === 'cache' ? '#0f172a' : '#64748b',
+            cursor: 'pointer',
+            boxShadow: tab === 'cache' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none'
+          }}
+        >
+          Clear Cache & Refresh
+        </button>
+      </div>
+
+      {tab === 'data' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          <div style={{ background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: 10, padding: 12, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <AlertTriangle size={20} color="#e11d48" style={{ flexShrink: 0, marginTop: 2 }} />
+            <div style={{ fontSize: 13, color: '#9f1239', lineHeight: 1.4 }}>
+              <strong>Caution:</strong> This will delete operational and evaluation records for this academic cycle.
+              <div style={{ marginTop: 4, fontSize: 12, color: '#be123c' }}>
+                Staff member user accounts and logins will <b>NOT</b> be deleted.
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 9, background: '#f8fafc', padding: 14, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: '#334155', marginBottom: 2 }}>Select records to reset:</div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', color: '#1e293b' }}>
+              <input type="checkbox" checked={resetWork} onChange={e => setResetWork(e.target.checked)} />
+              <span>All Work Items (CCE, Midterm, Lesson Plans, Duties, Tasks)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', color: '#1e293b' }}>
+              <input type="checkbox" checked={resetAppraisals} onChange={e => setResetAppraisals(e.target.checked)} />
+              <span>All Appraisals, Finalized Scores & Domain Ratings</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', color: '#1e293b' }}>
+              <input type="checkbox" checked={resetBonus} onChange={e => setResetBonus(e.target.checked)} />
+              <span>All Bonus Point Submissions</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer', color: '#1e293b' }}>
+              <input type="checkbox" checked={resetAnnouncements} onChange={e => setResetAnnouncements(e.target.checked)} />
+              <span>All Announcements</span>
+            </label>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ fontSize: 13, fontWeight: 600, color: '#475569' }}>
+              Type <span style={{ color: '#e11d48', fontWeight: 800 }}>RESET</span> to confirm:
+            </label>
+            <input
+              type="text"
+              value={confirmCode}
+              onChange={e => setConfirmCode(e.target.value)}
+              placeholder="Type RESET"
+              style={{
+                ...S.input,
+                width: '100%',
+                borderColor: confirmCode.trim().toUpperCase() === 'RESET' ? '#e11d48' : '#cbd5e1'
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 8 }}>
+            {!inline && <button type="button" onClick={onClose} style={S.sm('#fff')}>Cancel</button>}
+            <button
+              type="button"
+              disabled={loading || confirmCode.trim().toUpperCase() !== 'RESET'}
+              onClick={handleResetData}
+              style={{
+                ...S.btn('#e11d48'),
+                opacity: (loading || confirmCode.trim().toUpperCase() !== 'RESET') ? 0.5 : 1,
+                cursor: (loading || confirmCode.trim().toUpperCase() !== 'RESET') ? 'not-allowed' : 'pointer',
+                padding: '10px 18px',
+                fontWeight: 700
+              }}
+            >
+              {loading ? 'Resetting Data...' : 'Permanently Reset Selected Records'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <div style={{ fontSize: 13, color: '#475569', lineHeight: 1.5, background: '#f8fafc', padding: 14, borderRadius: 10, border: '1px solid #e2e8f0' }}>
+            Clears locally stored browser sessions, memory caches, and forces an immediate fresh re-fetch of all live data. <b>No database records will be deleted.</b>
+          </div>
+          <button
+            type="button"
+            onClick={handleClearCache}
+            style={{ ...S.btn('#2563eb'), justifyContent: 'center', padding: '12px 18px', fontSize: 14 }}
+          >
+            <RefreshCw size={16} /> Clear Cache & Refresh Site Now
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  if (inline) {
+    return (
+      <div style={{ ...S.card, padding: 24, border: '1px solid #fecdd3', background: '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+          <div style={{ background: '#fee2e2', color: '#e11d48', padding: 8, borderRadius: 8 }}>
+            <RotateCcw size={22} />
+          </div>
+          <div>
+            <h3 style={{ margin: 0, fontSize: 18, color: '#9f1239' }}>Reset Site (Admin System)</h3>
+            <div style={{ fontSize: 12, color: '#64748b' }}>Wipe evaluation records or clear system cache</div>
+          </div>
+        </div>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Modal title="Reset Site (Admin Only)" onClose={onClose} width={520}>
+      {content}
+    </Modal>
+  );
+}
+
+function ResetSitePage({ userRole }) {
+  return (
+    <div style={{ maxWidth: 640 }}>
+      <ResetSiteModal userRole={userRole} inline />
+    </div>
+  );
+}
+
+// ==========================================
 // APP SHELL
 // ==========================================
 export default function Root() {
@@ -382,6 +716,7 @@ function App() {
   const [password, setPassword] = useState('');
   const [active, setActive] = useState('dashboard');
   const [mobileNav, setMobileNav] = useState(false);
+  const [resetModalOpen, setResetModalOpen] = useState(false);
 
   useEffect(() => {
     if (!supabase) return;
@@ -422,7 +757,22 @@ function App() {
   }
 
   if (!isSupabaseConfigured) return <div style={{ padding: 50, textAlign: 'center' }}>Supabase is not configured. Check ./lib/supabase.</div>;
-  if (authLoading) return <div style={{ padding: 50, textAlign: 'center' }}>Loading...</div>;
+  if (authLoading) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#f8fafc', gap: 16 }}>
+        <div style={{ background: '#1e293b', color: '#fff', padding: 14, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <ShieldCheck size={36} />
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <strong style={{ fontSize: 18, color: '#0f172a' }}>Staff Appraisal</strong>
+          <div style={{ fontSize: 11, color: '#64748b', letterSpacing: 1, marginTop: 2, fontWeight: 700 }}>PERFORMANCE SYSTEM</div>
+        </div>
+        <div style={{ width: 140, height: 4, background: '#e2e8f0', borderRadius: 4, overflow: 'hidden', marginTop: 12 }}>
+          <div className="skeleton" style={{ width: '100%', height: '100%' }} />
+        </div>
+      </div>
+    );
+  }
   if (!session) return <Login email={email} setEmail={setEmail} password={password} setPassword={setPassword} onSubmit={signIn} error={authError} loading={signingIn} />;
   if (profile && profile.active === false) {
     return (
@@ -457,13 +807,42 @@ function App() {
             {allowedNav.map(item => {
               const Icon = item.icon;
               const isActive = page === item.id;
+              const isReset = item.id === 'reset';
               return (
-                <button key={item.id} className={`nav-link ${isActive ? 'active' : ''}`} onClick={() => { setActive(item.id); setMobileNav(false); }}>
-                  <Icon size={18} /> {item.label}
+                <button
+                  key={item.id}
+                  className={`nav-link ${isActive ? 'active' : ''}`}
+                  onClick={() => { setActive(item.id); setMobileNav(false); }}
+                  style={isReset ? { color: '#e11d48', fontWeight: 700 } : undefined}
+                >
+                  <Icon size={18} color={isReset ? '#e11d48' : undefined} /> {item.label}
                 </button>
               );
             })}
           </nav>
+
+          <div style={{ marginTop: 10, padding: '0 4px' }}>
+            <button
+              type="button"
+              onClick={() => { setResetModalOpen(true); setMobileNav(false); }}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 14px',
+                borderRadius: 10,
+                background: '#fff1f2',
+                color: '#e11d48',
+                border: '1px solid #fecdd3',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: 'pointer'
+              }}
+            >
+              <RotateCcw size={16} /> Reset Site
+            </button>
+          </div>
 
           <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: 16, marginTop: 10 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -488,6 +867,28 @@ function App() {
               <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: '#0f172a', letterSpacing: '-0.3px' }}>{nav.find(n => n.id === page)?.label}</h2>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setResetModalOpen(true)}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  background: '#fff1f2',
+                  color: '#e11d48',
+                  border: '1px solid #fecdd3',
+                  borderRadius: 20,
+                  padding: '6px 12px',
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(225,29,72,0.06)'
+                }}
+                title="Admin Site Reset"
+              >
+                <RotateCcw size={13} />
+                <span>Reset Site</span>
+              </button>
               <div className="desktop-only" style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#fff', padding: '6px 14px', borderRadius: 20, border: '1px solid #e2e8f0', fontSize: 13, color: '#475569', fontWeight: 500 }}>
                 <span style={{ width: 8, height: 8, background: '#10b981', borderRadius: '50%' }}></span> Cycle: {CYCLE.replace('-', '–')}
               </div>
@@ -505,7 +906,8 @@ function App() {
           {profile && page === 'work' && <WorkPage userRole={userRole} profile={profile} />}
           {profile && page === 'appraisal' && <AppraisalPage userRole={userRole} profile={profile} />}
           {profile && page === 'reports' && <ReportsPage />}
-          {profile && page === 'settings' && <AccountSettingsPage profile={profile} reloadProfile={() => loadProfile(profile.id)} />}
+          {profile && page === 'settings' && <AccountSettingsPage profile={profile} reloadProfile={() => loadProfile(profile.id)} onOpenReset={() => setResetModalOpen(true)} />}
+          {profile && page === 'reset' && <ResetSitePage userRole={userRole} />}
         </main>
 
         {/* Mobile Bottom Navigation Bar */}
@@ -552,6 +954,7 @@ function App() {
           </button>
         </nav>
       </div>
+      {resetModalOpen && <ResetSiteModal userRole={userRole} onClose={() => setResetModalOpen(false)} />}
     </>
   );
 }
@@ -592,10 +995,11 @@ function Login({ email, setEmail, password, setPassword, onSubmit, error, loadin
 // ==========================================
 // DASHBOARD
 // ==========================================
+
 function DashboardPage({ userRole, profile, goto }) {
   const isReviewer = userRole !== 'teacher';
   const canManage = userRole === 'admin' || userRole === 'coordinator';
-  const [d, setD] = useState(null);
+  const [d, setD] = useState(() => (dashCache.profileId === profile.id && dashCache.data) ? dashCache.data : null);
 
   useEffect(() => {
     (async () => {
@@ -606,11 +1010,13 @@ function DashboardPage({ userRole, profile, goto }) {
         own(supabase.from('appraisals').select('staff_id, status, final_score').eq('cycle', CYCLE)),
         supabase.from('announcements').select('*').order('pinned', { ascending: false }).order('created_at', { ascending: false }).limit(3)
       ]);
-      setD({ staff: staff.data || [], work: work.data || [], ap: ap.data || [], ann: ann.data || [] });
+      const res = { staff: staff.data || [], work: work.data || [], ap: ap.data || [], ann: ann.data || [] };
+      dashCache = { data: res, profileId: profile.id, time: Date.now() };
+      setD(res);
     })();
   }, [profile.id, userRole]);
 
-  if (!d) return <Empty text="Loading dashboard..." />;
+  if (!d) return <PageSkeleton cards={isReviewer ? 6 : 4} rows={3} />;
 
   const today = todayStr(); const month = today.slice(0, 7);
   const n = (arr, fn) => arr.filter(fn).length;
@@ -678,6 +1084,26 @@ function DashboardPage({ userRole, profile, goto }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+      {/* Admin Reset Banner */}
+      <div style={{ background: '#fff1f2', border: '1px solid #fecdd3', borderRadius: 12, padding: '12px 18px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ background: '#fee2e2', color: '#e11d48', padding: 8, borderRadius: 8 }}>
+            <RotateCcw size={18} />
+          </div>
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 800, color: '#9f1239' }}>Admin Reset Tool</div>
+            <div style={{ fontSize: 12, color: '#64748b' }}>Wipe evaluation records for a fresh cycle or clear browser cache</div>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => goto('reset')}
+          style={{ ...S.btn('#e11d48'), padding: '8px 16px', fontWeight: 700, fontSize: 13 }}
+        >
+          <RotateCcw size={14} /> Open Reset Site Panel
+        </button>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 20 }}>
         <StatCard label="Total Active Staff" value={d.staff.length} onClick={() => goto('staff')} />
         <StatCard label="Pending Work" value={pending} color="#d97706" onClick={() => goto('work')} sub={overdue ? `${overdue} overdue` : undefined} />
@@ -930,13 +1356,17 @@ function ScoreBreakdownModal({ staff, onClose }) {
   );
 }
 
+let leaderboardCache = { data: null, time: 0 };
+
 function LeaderboardPage({ profile }) {
-  const [data, setData] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState(() => leaderboardCache.data || []);
+  const [loading, setLoading] = useState(() => !leaderboardCache.data);
   const [needsSql, setNeedsSql] = useState(false);
   const [q, setQ] = useState('');
   const [dept, setDept] = useState('all');
   const [selectedStaff, setSelectedStaff] = useState(null);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 16;
   const rater = profile.role === 'admin' || profile.role === 'appraisal_authority';
 
   const load = useCallback(async () => {
@@ -976,6 +1406,7 @@ function LeaderboardPage({ profile }) {
     });
     scores.sort((a, b) => b.totalEarned - a.totalEarned);
     scores.forEach((s, i) => { s.rank = i + 1; });
+    leaderboardCache = { data: scores, time: Date.now() };
     setData(scores); setLoading(false);
   }, [rater]);
 
@@ -990,10 +1421,12 @@ function LeaderboardPage({ profile }) {
   const filtering = q || dept !== 'all';
   const top3 = filtering ? [] : filtered.slice(0, 3);
   const rest = filtering ? filtered : filtered.slice(3);
+  const totalPages = Math.ceil(rest.length / PAGE_SIZE) || 1;
+  const paginatedRest = rest.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const exportCSV = () => data.length && downloadCSV(`Staff_Leaderboard_${CYCLE}.csv`, ['Rank', 'Staff Name', 'Department', 'Score (Max 100)'], filtered.map(r => [r.rank, r.full_name, r.department || '-', r.officialScore.toFixed(2)]));
 
-  if (loading) return <Empty text="Loading scores..." />;
+  if (loading && !data.length) return <PageSkeleton cards={3} rows={6} />;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -1027,7 +1460,7 @@ function LeaderboardPage({ profile }) {
       <div style={{ ...S.card, borderRadius: 16 }}>
         <h3 style={{ marginTop: 0, marginBottom: 20 }}>{filtering ? 'Results' : 'Other Staff Members'}</h3>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 15 }}>
-          {rest.map(r => (
+          {paginatedRest.map(r => (
             <div key={r.id} onClick={() => setSelectedStaff(r)} style={{ display: 'flex', alignItems: 'center', gap: 15, padding: 15, border: r.id === profile.id ? '2px solid #2563eb' : '1px solid #f1f5f9', borderRadius: 12, background: '#f8fafc', cursor: 'pointer' }}>
               <Avatar url={r.avatar_url} name={r.full_name} size={50} />
               <div style={{ flex: 1, overflow: 'hidden' }}>
@@ -1041,6 +1474,18 @@ function LeaderboardPage({ profile }) {
             </div>
           ))}
           {rest.length === 0 && <p style={{ color: '#64748b', gridColumn: '1 / -1' }}>No staff members found.</p>}
+          {rest.length > PAGE_SIZE && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 14, borderTop: '1px solid #f1f5f9', gridColumn: '1 / -1', flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ fontSize: 13, color: '#64748b' }}>
+                Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, rest.length)} of {rest.length} staff
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} style={{ ...S.sm('#fff'), color: page === 1 ? '#94a3b8' : '#334155', border: '1px solid #cbd5e1', cursor: page === 1 ? 'not-allowed' : 'pointer' }}>Previous</button>
+                <span style={{ fontSize: 13, fontWeight: 600, padding: '0 8px' }}>{page} / {totalPages}</span>
+                <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} style={{ ...S.sm('#fff'), color: page >= totalPages ? '#94a3b8' : '#334155', border: '1px solid #cbd5e1', cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1133,16 +1578,23 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
   }
 
   const depts = [...new Set(staff.map(s => s.department).filter(Boolean))].sort();
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 15;
   const filtered = staff.filter(s =>
     (statusF === 'all' || (statusF === 'active' ? s.active !== false : s.active === false)) &&
     (roleF === 'all' || s.role === roleF) && (deptF === 'all' || s.department === deptF) &&
     `${s.full_name} ${s.email || ''} ${s.staff_code || ''}`.toLowerCase().includes(q.toLowerCase()));
+
+  const totalPages = Math.ceil(filtered.length / PAGE_SIZE) || 1;
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   const exportStaff = () => downloadCSV('Staff_Directory.csv', ['Name', 'Email/ID', 'Staff Code', 'Department', 'Designation', 'Role', 'Active'],
     filtered.map(s => [s.full_name, s.email, s.staff_code, s.department, s.designation, s.role, s.active === false ? 'No' : 'Yes']));
 
   const inp = (k, ph, obj, set, req = true) => <input placeholder={ph} value={obj[k] || ''} onChange={e => set({ ...obj, [k]: e.target.value })} required={req} style={S.input} />;
   const roleOptions = (withAdmin) => <><option value="teacher">Teacher</option><option value="coordinator">Coordinator</option><option value="appraisal_authority">Appraisal Authority</option>{withAdmin && <option value="admin">Admin</option>}</>;
+
+  if (loading && !staff.length) return <PageSkeleton cards={0} rows={7} />;
 
   return (
     <div style={S.card}>
@@ -1157,10 +1609,10 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-        <SearchBox value={q} onChange={setQ} placeholder="Search name, ID, code..." />
-        <select value={roleF} onChange={e => setRoleF(e.target.value)} style={S.input}><option value="all">All roles</option>{roleOptions(true)}</select>
-        <select value={deptF} onChange={e => setDeptF(e.target.value)} style={S.input}><option value="all">All departments</option>{depts.map(x => <option key={x}>{x}</option>)}</select>
-        <select value={statusF} onChange={e => setStatusF(e.target.value)} style={S.input}><option value="active">Active</option><option value="inactive">Inactive</option><option value="all">All</option></select>
+        <SearchBox value={q} onChange={v => { setQ(v); setPage(1); }} placeholder="Search name, ID, code..." />
+        <select value={roleF} onChange={e => { setRoleF(e.target.value); setPage(1); }} style={S.input}><option value="all">All roles</option>{roleOptions(true)}</select>
+        <select value={deptF} onChange={e => { setDeptF(e.target.value); setPage(1); }} style={S.input}><option value="all">All departments</option>{depts.map(x => <option key={x}>{x}</option>)}</select>
+        <select value={statusF} onChange={e => { setStatusF(e.target.value); setPage(1); }} style={S.input}><option value="active">Active</option><option value="inactive">Inactive</option><option value="all">All</option></select>
       </div>
 
       {addOpen && (
@@ -1202,9 +1654,9 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
         </Modal>
       )}
 
-      {loading ? <Empty text="Loading..." /> : filtered.length === 0 ? <Empty text="No staff match these filters." /> : (
+      {filtered.length === 0 ? <Empty text="No staff match these filters." /> : (
         <Table heads={['Photo', 'Name & Email', 'Role', 'Department', 'Status', 'Actions']} min={850}>
-          {filtered.map(s => (
+          {paginated.map(s => (
             <tr key={s.id} style={{ ...S.row, opacity: s.active === false ? 0.6 : 1 }}>
               <td style={S.td}>
                 <div style={{ position: 'relative', width: 45, height: 45 }}>
@@ -1236,6 +1688,19 @@ function StaffDirectoryPage({ currentUserRole, profile }) {
             </tr>
           ))}
         </Table>
+      )}
+
+      {filtered.length > PAGE_SIZE && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 14, borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', gap: 10 }}>
+          <div style={{ fontSize: 13, color: '#64748b' }}>
+            Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, filtered.length)} of {filtered.length} staff
+          </div>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <button disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} style={{ ...S.sm('#fff'), color: page === 1 ? '#94a3b8' : '#334155', border: '1px solid #cbd5e1', cursor: page === 1 ? 'not-allowed' : 'pointer' }}>Previous</button>
+            <span style={{ fontSize: 13, fontWeight: 600, padding: '0 8px' }}>{page} / {totalPages}</span>
+            <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} style={{ ...S.sm('#fff'), color: page >= totalPages ? '#94a3b8' : '#334155', border: '1px solid #cbd5e1', cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next</button>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1467,11 +1932,13 @@ function WorkTable({ kind, userRole, profile, staffList }) {
   const canManage = userRole === 'admin' || userRole === 'coordinator';
   const generated = kind === 'cce' || kind === 'midterm' || kind === 'lesson';
   const { toast, confirm, ask } = useUI();
-  const [rows, setRows] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [rows, setRows] = useState(() => workCache[kind] || []);
+  const [loading, setLoading] = useState(() => !workCache[kind]);
   const [q, setQ] = useState(''); const [st, setSt] = useState('all'); const [sf, setSf] = useState('all'); const [mon, setMon] = useState('');
   const [assign, setAssign] = useState(false); const [gen, setGen] = useState(false); const [edit, setEdit] = useState(null);
   const [mySubjects, setMySubjects] = useState([]);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 15;
   const fileRef = useRef(null); const uploadFor = useRef(null);
   const today = todayStr();
 
@@ -1480,7 +1947,9 @@ function WorkTable({ kind, userRole, profile, staffList }) {
     if (isTeacher) query = query.eq('staff_id', profile.id);
     const { data, error } = await query;
     if (error) toast(error.message, 'error');
-    setRows(data || []); setLoading(false);
+    const res = data || [];
+    workCache[kind] = res;
+    setRows(res); setLoading(false);
   };
   useEffect(() => { load(); }, []);
   useEffect(() => {
@@ -1545,8 +2014,12 @@ function WorkTable({ kind, userRole, profile, staffList }) {
   const isOverdue = (r) => r.status === 'Pending' && r.due_date && r.due_date < today;
   const shown = rows.filter(r => (st === 'all' || (st === 'Overdue' ? isOverdue(r) : r.status === st)) && (sf === 'all' || r.staff_id === sf) && (!mon || r.month === mon)
     && `${r.title} ${r.subject_name || ''} ${r.profiles?.full_name || ''}`.toLowerCase().includes(q.toLowerCase()));
+  const totalPages = Math.ceil(shown.length / PAGE_SIZE) || 1;
+  const paginated = shown.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
   const cnt = (f) => rows.filter(f).length;
   const genLabel = { cce: 'Generate CCE for a Month', midterm: 'Assign Midterm Exam', lesson: 'Issue Monthly Lesson Plan' }[kind];
+
+  if (loading && !rows.length) return <PageSkeleton cards={4} rows={6} />;
 
   return (
     <div style={S.card}>
@@ -1571,10 +2044,10 @@ function WorkTable({ kind, userRole, profile, staffList }) {
       </div>
 
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
-        <SearchBox value={q} onChange={setQ} placeholder="Search title, subject or staff..." />
-        <select value={st} onChange={e => setSt(e.target.value)} style={S.input}><option value="all">All status</option><option>Pending</option><option>Submitted</option><option>Completed</option><option>Overdue</option></select>
-        {(kind === 'cce' || kind === 'lesson') && <input type="month" value={mon} onChange={e => setMon(e.target.value)} style={S.input} title="Filter by month" />}
-        {!isTeacher && <select value={sf} onChange={e => setSf(e.target.value)} style={S.input}><option value="all">All staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>}
+        <SearchBox value={q} onChange={v => { setQ(v); setPage(1); }} placeholder="Search title, subject or staff..." />
+        <select value={st} onChange={e => { setSt(e.target.value); setPage(1); }} style={S.input}><option value="all">All status</option><option>Pending</option><option>Submitted</option><option>Completed</option><option>Overdue</option></select>
+        {(kind === 'cce' || kind === 'lesson') && <input type="month" value={mon} onChange={e => { setMon(e.target.value); setPage(1); }} style={S.input} title="Filter by month" />}
+        {!isTeacher && <select value={sf} onChange={e => { setSf(e.target.value); setPage(1); }} style={S.input}><option value="all">All staff</option>{staffList.map(s => <option key={s.id} value={s.id}>{s.full_name}</option>)}</select>}
       </div>
 
       {gen && <GenerateModal kind={kind} staffList={staffList} profile={profile} onClose={() => setGen(false)} onDone={() => { setGen(false); load(); }} />}
@@ -1595,12 +2068,12 @@ function WorkTable({ kind, userRole, profile, staffList }) {
         </Modal>
       )}
 
-      {loading ? <Empty text="Loading..." /> : shown.length === 0 ? <Empty text={`No ${K.label.toLowerCase()} found.`} /> : (
+      {shown.length === 0 ? <Empty text={`No ${K.label.toLowerCase()} found.`} /> : (
         <>
           {/* Desktop Table View */}
           <div className="desktop-only-table">
             <Table heads={[...(!isTeacher ? ['Staff'] : []), 'Work', 'Sub-domain', 'Deadline', 'Points', 'Status', 'Action']} min={940}>
-              {shown.map(r => {
+              {paginated.map(r => {
                 const mine = r.staff_id === profile.id;
                 const canSubmit = mine && r.status === 'Pending';
                 const canReview = canManage && (!mine || userRole === 'admin');
@@ -1644,7 +2117,7 @@ function WorkTable({ kind, userRole, profile, staffList }) {
 
           {/* Mobile Cards View */}
           <div className="mobile-only-cards" style={{ display: 'none', flexDirection: 'column', gap: 12 }}>
-            {shown.map(r => {
+            {paginated.map(r => {
               const mine = r.staff_id === profile.id;
               const canSubmit = mine && r.status === 'Pending';
               const canReview = canManage && (!mine || userRole === 'admin');
@@ -1690,6 +2163,19 @@ function WorkTable({ kind, userRole, profile, staffList }) {
               );
             })}
           </div>
+
+          {shown.length > PAGE_SIZE && (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 14, paddingTop: 14, borderTop: '1px solid #f1f5f9', flexWrap: 'wrap', gap: 10 }}>
+              <div style={{ fontSize: 13, color: '#64748b' }}>
+                Showing {((page - 1) * PAGE_SIZE) + 1}–{Math.min(page * PAGE_SIZE, shown.length)} of {shown.length} works
+              </div>
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <button disabled={page === 1} onClick={() => setPage(p => Math.max(1, p - 1))} style={{ ...S.sm('#fff'), color: page === 1 ? '#94a3b8' : '#334155', border: '1px solid #cbd5e1', cursor: page === 1 ? 'not-allowed' : 'pointer' }}>Previous</button>
+                <span style={{ fontSize: 13, fontWeight: 600, padding: '0 8px' }}>{page} / {totalPages}</span>
+                <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} style={{ ...S.sm('#fff'), color: page >= totalPages ? '#94a3b8' : '#334155', border: '1px solid #cbd5e1', cursor: page >= totalPages ? 'not-allowed' : 'pointer' }}>Next</button>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -2307,7 +2793,7 @@ function ReportsPage() {
           <h3 style={{ margin: 0 }}>Domain-wise Score Matrix ({CYCLE})</h3>
           <button onClick={exportMatrix} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>
         </div>
-        {!raw ? <Empty text="Loading..." /> : (
+        {!raw ? <PageSkeleton cards={0} rows={8} /> : (
           <Table heads={['Staff', ...domains.map(d => `${d.code} (${d.weight})`), 'Total /100', 'Status']} min={900}>
             {matrix.map(r => (
               <tr key={r.s.id} style={S.row}>
@@ -2331,7 +2817,7 @@ function ReportsPage() {
             <button onClick={exportTrack} style={S.btn('#16a34a')}><Download size={16} /> CSV</button>
           </div>
         </div>
-        {!raw ? <Empty text="Loading..." /> : trackRows.length === 0 ? <Empty text="No records for this selection." /> : (
+        {!raw ? <PageSkeleton cards={0} rows={6} /> : trackRows.length === 0 ? <Empty text="No records for this selection." /> : (
           <Table heads={['Staff', 'Total', 'Completed', 'Submitted', 'Pending', 'Overdue', 'Late', 'Progress']} min={760}>
             {trackRows.map(r => (
               <tr key={r.s.id} style={S.row}>
@@ -2352,7 +2838,7 @@ function ReportsPage() {
 // ==========================================
 // ACCOUNT SETTINGS
 // ==========================================
-function AccountSettingsPage({ profile, reloadProfile }) {
+function AccountSettingsPage({ profile, reloadProfile, onOpenReset }) {
   const { toast } = useUI();
   const [newEmail, setNewEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -2434,6 +2920,30 @@ function AccountSettingsPage({ profile, reloadProfile }) {
           <button type="submit" disabled={passLoading} style={S.btn('#16a34a', { justifyContent: 'center', padding: 12 })}>{passLoading ? 'Updating...' : 'Update Password'}</button>
         </form>
       </div>
+
+      {profile.role === 'admin' && (
+        <div style={{ ...S.card, padding: 30, border: '1px solid #fecdd3', background: '#fff' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <div style={{ background: '#fee2e2', color: '#e11d48', padding: 8, borderRadius: 8 }}>
+              <RotateCcw size={20} />
+            </div>
+            <div>
+              <h3 style={{ margin: 0, color: '#9f1239' }}>Admin System: Reset Site</h3>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Wipe academic records or clear site cache</div>
+            </div>
+          </div>
+          <p style={{ fontSize: 13, color: '#475569', margin: '10px 0 16px 0', lineHeight: 1.5 }}>
+            This action is restricted to Administrators. You can reset evaluation data (work items, ratings, appraisals) for a new academic year, or clear system caches. Staff logins are preserved.
+          </p>
+          <button
+            type="button"
+            onClick={onOpenReset}
+            style={{ ...S.btn('#e11d48'), padding: '10px 18px', fontWeight: 700 }}
+          >
+            <RotateCcw size={16} /> Open Reset Site Panel
+          </button>
+        </div>
+      )}
     </div>
   );
 }
